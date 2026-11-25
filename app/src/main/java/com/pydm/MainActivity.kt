@@ -32,6 +32,8 @@ import org.json.JSONObject
 
 const val HOME_UI = "http://127.0.0.1:8080/"
 const val HOME_WEB = "https://www.google.com/"
+const val REQ_BM_EXPORT = 11
+const val REQ_BM_IMPORT = 12
 
 // Domain iklan/pelacak yang diblokir (daftar sendiri, bisa ditambah). Subdomain ikut diblokir.
 val AD_HOSTS = ("doubleclick.net googlesyndication.com googleadservices.com adservice.google.com 2mdn.net " +
@@ -123,6 +125,7 @@ class MainActivity : Activity() {
     private lateinit var fsHolder: FrameLayout
     private lateinit var bmTabB: Button
     private lateinit var bmTabH: Button
+    private lateinit var bmIo: LinearLayout
     private var bmMode = 0   // 0 = bookmark, 1 = riwayat
     private var fsView: View? = null
     private var fsCb: WebChromeClient.CustomViewCallback? = null
@@ -257,6 +260,12 @@ class MainActivity : Activity() {
         val bscroll = ScrollView(this)
         bscroll.addView(bmList, -1, -2)
         bcol.addView(bscroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        bmIo = LinearLayout(this)
+        bmIo.gravity = Gravity.CENTER_VERTICAL
+        bmIo.setPadding(dp(4), 0, dp(4), 0)
+        bmIo.addView(btn("📥 Impor", 15f) { importBm() }, lp(0, 1f))
+        bmIo.addView(btn("📤 Ekspor", 15f) { exportBm() }, lp(0, 1f))
+        bcol.addView(bmIo, -1, -2)
         bcol.addView(btn("🧹  Hapus data", 15f) { clearDataDialog() }, -1, -2)
         bmDrawer = SwipePanel(this, bcol, false, dw)
 
@@ -459,6 +468,7 @@ class MainActivity : Activity() {
         if (!::bmList.isInitialized) return
         bmTabB.setTextColor(if (bmMode == 0) Color.parseColor("#FFC107") else Color.WHITE)
         bmTabH.setTextColor(if (bmMode == 1) Color.parseColor("#FFC107") else Color.WHITE)
+        if (::bmIo.isInitialized) bmIo.visibility = if (bmMode == 0) View.VISIBLE else View.GONE
         if (bmMode == 1) { rebuildHist(); return }
         bmList.removeAllViews()
         val l = loadBm()
@@ -495,6 +505,79 @@ class MainActivity : Activity() {
             }
             bmList.addView(col, -1, -2)
         }
+    }
+
+    // ---------- impor / ekspor bookmark (.json) ----------
+    private fun exportBm() {
+        if (loadBm().isEmpty()) { toast("Belum ada bookmark untuk diekspor"); return }
+        val name = "pydm-bookmark-" + java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(java.util.Date()) + ".json"
+        try {
+            val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
+            i.addCategory(Intent.CATEGORY_OPENABLE)
+            i.setType("application/json")
+            i.putExtra(Intent.EXTRA_TITLE, name)
+            startActivityForResult(i, REQ_BM_EXPORT)
+        } catch (e: Exception) { toast("Tidak ada aplikasi berkas untuk memilih lokasi simpan") }
+    }
+
+    private fun importBm() {
+        try {
+            val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            i.addCategory(Intent.CATEGORY_OPENABLE)
+            i.setType("*/*")
+            i.putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain", "application/octet-stream"))
+            startActivityForResult(i, REQ_BM_IMPORT)
+        } catch (e: Exception) { toast("Tidak ada aplikasi berkas untuk memilih berkas") }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(req: Int, res: Int, data: Intent?) {
+        super.onActivityResult(req, res, data)
+        val uri = data?.data
+        if (res != RESULT_OK || uri == null) return
+        if (req == REQ_BM_EXPORT) writeBm(uri)
+        else if (req == REQ_BM_IMPORT) readBm(uri)
+    }
+
+    private fun writeBm(uri: Uri) {
+        try {
+            val arr = JSONArray()
+            for (b in loadBm()) arr.put(JSONObject().put("t", b.first).put("u", b.second))
+            val root = JSONObject().put("app", "pydm").put("type", "bookmarks").put("version", 1)
+                .put("exported", System.currentTimeMillis()).put("bookmarks", arr)
+            val out = contentResolver.openOutputStream(uri, "wt") ?: throw java.io.IOException("Tidak bisa menulis ke lokasi itu")
+            out.use { it.write(root.toString(2).toByteArray(Charsets.UTF_8)) }
+            toast("${arr.length()} bookmark diekspor")
+        } catch (e: Exception) { toast("Gagal mengekspor: " + (e.message ?: "").take(120)) }
+    }
+
+    // Impor menggabungkan: bookmark yang URL-nya sudah ada dilewati, bookmark lama tidak diubah
+    private fun readBm(uri: Uri) {
+        try {
+            val input = contentResolver.openInputStream(uri) ?: throw java.io.IOException("Tidak bisa membuka berkas")
+            val bytes = input.use { it.readBytes() }
+            if (bytes.size > 5_000_000) throw IllegalArgumentException("Berkas terlalu besar")
+            val txt = String(bytes, Charsets.UTF_8).trim().trimStart('\uFEFF')
+            val arr = if (txt.startsWith("[")) JSONArray(txt)
+                      else JSONObject(txt).optJSONArray("bookmarks") ?: throw IllegalArgumentException("Bukan berkas bookmark")
+            if (arr.length() == 0) { toast("Berkas tidak berisi bookmark"); return }
+            val list = loadBm()
+            val have = list.map { it.second }.toHashSet()
+            var added = 0
+            var skipped = 0
+            for (n in 0 until arr.length()) {
+                val o = arr.optJSONObject(n)
+                if (o == null) { skipped++; continue }
+                val u = o.optString("u", o.optString("url", "")).trim()
+                if (!u.contains("://") || u in have) { skipped++; continue }
+                val t = o.optString("t", o.optString("title", "")).trim()
+                list.add(Pair(if (t.isBlank()) u else t, u))
+                have.add(u)
+                added++
+            }
+            saveBm(list); paintStar(); rebuildBm()
+            toast("$added bookmark ditambahkan" + if (skipped > 0) ", $skipped dilewati (sudah ada/tidak valid)" else "")
+        } catch (e: Exception) { toast("Gagal mengimpor: berkas bukan JSON bookmark yang valid") }
     }
 
     // ---------- riwayat ----------
