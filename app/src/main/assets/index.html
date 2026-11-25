@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="id"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>PyDM</title>
+<style>
+:root{--bg:#121212;--bar:#212121;--tx:#e8e8e8;--dim:#9a9a9a;--acc:#f5c542;--ok:#6ba19a;--pg:#43a047;--er:#e57373}
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--tx);font:15px system-ui,sans-serif;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top)}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:8px}
+input,textarea,select{font:inherit;color:var(--tx);background:#2c2c2c;border:1px solid #444;border-radius:8px;padding:10px;width:100%}
+.bar{background:var(--bar);display:flex;align-items:center;gap:4px;padding:6px 10px}
+.bar h1{font-size:19px;margin:0;flex:1}
+.bar button{font-size:20px}
+#q{display:none;flex:1}
+.tabs{background:var(--bar);display:flex;overflow-x:auto}
+.tabs button{flex:1;white-space:nowrap;color:var(--dim);font-weight:600;padding:12px 10px;border-bottom:3px solid transparent}
+.tabs .on{color:#fff;border-color:var(--acc)}
+#list{flex:1;overflow-y:auto;padding-bottom:90px}
+.it{display:flex;gap:12px;align-items:center;padding:12px;border-bottom:1px solid #2a2a2a}
+.it.fin{background:#2f4a46}
+.ic{font-size:28px;width:34px;text-align:center}
+.mid{flex:1;min-width:0}
+.nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pb{height:6px;background:#333;border-radius:3px;margin:6px 0 4px;overflow:hidden}
+.pb i{display:block;height:100%;background:var(--pg)}
+.meta{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--dim)}
+.it.fin .meta{color:#bcd}.er{color:var(--er)}
+.btns{display:flex}.btns button{font-size:18px;padding:6px}
+.empty{text-align:center;color:var(--dim);padding:60px 20px}
+.fab{position:fixed;right:18px;bottom:calc(22px + env(safe-area-inset-bottom));width:58px;height:58px;border-radius:50%;background:var(--ok);color:#fff;font-size:32px;box-shadow:0 3px 10px #000a;padding:0}
+#br{position:fixed;inset:0;background:var(--bg);display:none;flex-direction:column;padding-top:env(safe-area-inset-top);z-index:5}
+#br.on{display:flex}
+#url{border-radius:22px;padding:9px 14px}
+#fr{flex:1;border:0;background:#fff;width:100%}
+.badge{position:relative}.badge b{position:absolute;top:0;right:0;background:var(--acc);color:#000;font-size:11px;border-radius:9px;min-width:17px;padding:1px 4px}
+dialog{background:var(--bar);color:var(--tx);border:1px solid #444;border-radius:14px;width:min(92vw,460px);padding:18px}
+dialog::backdrop{background:#000a}
+dialog h2{margin:0 0 12px;font-size:17px}
+dialog label{display:block;margin:10px 0 4px;color:var(--dim);font-size:13px}
+.act{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+.act button{padding:9px 16px;border-radius:8px}.act .p{background:var(--ok);color:#fff}
+.dl{display:flex;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid #333;word-break:break-all;font-size:13px;cursor:pointer}
+#toast{position:fixed;left:50%;bottom:100px;transform:translateX(-50%);background:#000d;padding:10px 16px;border-radius:20px;display:none;z-index:20}
+</style></head><body>
+
+<div class="bar">
+  <h1 id="ttl">PyDM</h1><input id="q" placeholder="Cari unduhan">
+  <button id="bs" title="Cari">🔍</button><button id="bb" title="Browser">🌐</button><button id="bc" title="Pengaturan">⚙️</button>
+</div>
+<div class="tabs" id="tabs"></div>
+<div id="list"></div>
+<button class="fab" id="fab" title="Tambah unduhan">+</button>
+
+<div id="br">
+  <div class="bar">
+    <button id="hm">🏠</button><button id="bk">←</button><button id="fw">→</button>
+    <input id="url" placeholder="Ketik alamat atau cari di web" autocapitalize="off" autocorrect="off">
+    <button id="rl">⟳</button><button id="js" title="JavaScript situs">JS</button>
+    <button id="dd" class="badge" title="Berkas terdeteksi">⬇️<b id="bd">0</b></button>
+    <button id="bx">✕</button>
+  </div>
+  <iframe id="fr"></iframe>
+</div>
+
+<dialog id="dAdd"><h2>Tambah unduhan</h2>
+  <label>Alamat berkas (satu per baris)</label><textarea id="aUrl" rows="4" placeholder="https://..."></textarea>
+  <label>Nama berkas (opsional, untuk satu alamat)</label><input id="aName">
+  <div class="act"><button data-close>Batal</button><button class="p" id="aOk">Unduh</button></div></dialog>
+
+<dialog id="dDl"><h2>Unduh berkas ini?</h2>
+  <label>Nama berkas</label><input id="pName"><p id="pInfo" style="color:var(--dim);font-size:13px;word-break:break-all"></p>
+  <div class="act"><button data-close>Batal</button><button class="p" id="pOk">Unduh</button></div></dialog>
+
+<dialog id="dDet"><h2>Berkas di halaman ini</h2><div id="detList"></div>
+  <div class="act"><button data-close>Tutup</button><button class="p" id="detAll">Unduh semua</button></div></dialog>
+
+<dialog id="dCfg"><h2>Pengaturan</h2>
+  <label>Mesin pencari browser</label><select id="cEng"></select>
+  <label>Folder penyimpanan (di server)</label><input id="cDir">
+  <label>Unduhan bersamaan</label><input id="cPar" type="number" min="1" max="10">
+  <label>Segmen per berkas (kecepatan)</label><input id="cSeg" type="number" min="1" max="16">
+  <div class="act"><button data-close>Batal</button><button class="p" id="cOk">Simpan</button></div></dialog>
+<div id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const api=(p,b)=>fetch(p,b?{method:'POST',body:JSON.stringify(b)}:{}).then(r=>r.json());
+let jobs=[],cfg={},tab='all',filter='';
+const TABS=[['all','Semua',j=>1],['dl','Mengunduh',j=>['queued','downloading','paused'].includes(j.status)],
+ ['fin','Selesai',j=>j.status=='finished'],['err','Error',j=>['error','stopped'].includes(j.status)]];
+const fmt=n=>{let u=['B','KB','MB','GB'],i=0;while(n>=1024&&i<3){n/=1024;i++}return n.toFixed(i?1:0)+' '+u[i]};
+const eta=s=>s>=3600?Math.floor(s/3600)+'j '+Math.floor(s%3600/60)+'m':s>=60?Math.floor(s/60)+'m '+Math.floor(s%60)+'d':Math.floor(s)+'d';
+const icon=n=>{const e=n.split('.').pop().toLowerCase();return /mp4|mkv|webm|avi|mov/.test(e)?'🎞️':/mp3|m4a|flac|wav|ogg/.test(e)?'🎵':/png|jpe?g|gif|webp/.test(e)?'🖼️':/zip|rar|7z|tar|gz|xz|iso|cso/.test(e)?'🗜️':e=='apk'?'📱':e=='pdf'?'📕':'📄'};
+const toast=t=>{const e=$('#toast');e.textContent=t;e.style.display='block';clearTimeout(e._t);e._t=setTimeout(()=>e.style.display='none',2500)};
+const ST={queued:'Antre',downloading:'Mengunduh',paused:'Jeda',stopped:'Dihentikan',error:'Gagal',finished:'Selesai'};
+
+function render(){
+  $('#tabs').innerHTML=TABS.map(([k,l,f])=>`<button data-t="${k}" class="${tab==k?'on':''}">${l} (${jobs.filter(f).length})</button>`).join('');
+  const f=TABS.find(t=>t[0]==tab)[2];
+  const rows=jobs.filter(f).filter(j=>j.name.toLowerCase().includes(filter)).sort((a,b)=>b.id-a.id);
+  $('#list').innerHTML=rows.map(j=>{
+    const p=j.size?Math.min(100,j.done/j.size*100):(j.status=='finished'?100:0), s=j.status;
+    const left=j.speed&&j.size?eta((j.size-j.done)/j.speed):'';
+    const b=(a,i)=>`<button data-a="${a}" data-id="${j.id}">${i}</button>`;
+    const btn=(s=='downloading'||s=='queued'?b('pause','⏸')+b('stop','⏹'):s=='finished'?`<a href="/file/${j.id}" download style="text-decoration:none"><button>💾</button></a>`:b('resume','▶️'))+b('delete','🗑️');
+    return `<div class="it ${s=='finished'?'fin':''}"><div class="ic">${icon(j.name)}</div><div class="mid"><div class="nm">${esc(j.name)}</div>
+      ${s=='finished'?'':`<div class="pb"><i style="width:${p}%"></i></div>`}
+      <div class="meta"><span>${s=='finished'?fmt(j.size):fmt(j.done)+(j.size?' / '+fmt(j.size):'')}</span>
+      <span class="${s=='error'?'er':''}">${s=='downloading'&&j.speed?fmt(j.speed)+'/d':s=='error'?esc(j.error).slice(0,40):ST[s]}</span><span>${left}</span></div></div>
+      <div class="btns">${btn}</div></div>`}).join('')||'<div class="empty">Belum ada unduhan.<br>Ketuk + atau buka 🌐 untuk menjelajah.</div>';
+}
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function poll(){try{const d=await api('/api/list');jobs=d.jobs;cfg=d.cfg;render()}catch(e){}setTimeout(poll,1000)}
+
+$('#tabs').onclick=e=>{const t=e.target.dataset.t;if(t){tab=t;render()}};
+$('#list').onclick=async e=>{const b=e.target.closest('[data-a]');if(!b)return;const a=b.dataset.a,id=+b.dataset.id;let file=false;
+  if(a=='delete'){if(!confirm('Hapus dari daftar?'))return;file=confirm('Hapus juga berkas yang sudah diunduh?')}
+  await api('/api/act',{id,a,file})};
+$('#bs').onclick=()=>{const q=$('#q');const on=q.style.display!='block';q.style.display=on?'block':'none';$('#ttl').style.display=on?'none':'';if(on)q.focus();else{q.value='';filter='';render()}};
+$('#q').oninput=e=>{filter=e.target.value.toLowerCase();render()};
+document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close());
+
+$('#fab').onclick=()=>{$('#aUrl').value='';$('#aName').value='';$('#dAdd').showModal()};
+$('#aOk').onclick=async()=>{const us=$('#aUrl').value.split('\n').map(s=>s.trim()).filter(Boolean);$('#dAdd').close();
+  for(const u of us){const r=await api('/api/add',{url:u,name:us.length==1?$('#aName').value:''});toast(r.error?'Gagal: '+r.error:'Ditambahkan ke antrean')}};
+$('#bc').onclick=()=>{$('#cEng').value=eng;$('#cDir').value=cfg.dir;$('#cPar').value=cfg.parallel;$('#cSeg').value=cfg.segments;$('#dCfg').showModal()};
+$('#cOk').onclick=async()=>{eng=$('#cEng').value;try{localStorage.setItem('eng',eng)}catch(e){}await api('/api/cfg',{dir:$('#cDir').value,parallel:$('#cPar').value,segments:$('#cSeg').value});$('#dCfg').close();toast('Pengaturan disimpan')};
+
+/* ---- browser ---- */
+let hist=[],hi=-1,det=[],skip=false,pend=null,tm=0,jsOn=true;
+const ENG={google:['Google','https://www.google.com/','https://www.google.com/search?q='],
+ ddg:['DuckDuckGo','https://html.duckduckgo.com/html/','https://html.duckduckgo.com/html/?q='],
+ bing:['Bing','https://www.bing.com/','https://www.bing.com/search?q=']};
+let eng='google';try{eng=localStorage.getItem('eng')||'ddg'}catch(e){}if(!ENG[eng])eng='ddg';
+$('#cEng').innerHTML=Object.entries(ENG).map(([k,v])=>`<option value="${k}">${v[0]}</option>`).join('');
+const home=()=>'https://www.google.com/';
+const fr=$('#fr');
+function open_(on){$('#br').classList.toggle('on',on);if(on&&!hist.length)load(home(),true)}
+$('#bb').onclick=()=>window.Android?Android.openBrowser():open_(true);$('#bx').onclick=()=>open_(false);
+function norm(v){v=v.trim();if(/^https?:\/\//i.test(v))return v;
+  if(!/\s/.test(v)&&/^[\w-]+(\.[\w-]+)+([\/:?#]|$)/.test(v))return'https://'+v;
+  return ENG[eng][2]+encodeURIComponent(v)}
+function load(u,push){if(push){hist=hist.slice(0,hi+1);hist.push(u);hi++}skip=true;det=[];badge();$('#url').value=u;clearTimeout(tm);tm=setTimeout(()=>toast('Halaman belum merespons. Periksa koneksi atau ganti mesin pencari di ⚙️'),15000);fr.src='/browse?u='+encodeURIComponent(u)+'&js='+(jsOn?1:0)}
+const badge=()=>$('#bd').textContent=det.length;
+$('#url').onkeydown=e=>{if(e.key=='Enter'){load(norm(e.target.value),true);e.target.blur()}};
+$('#hm').onclick=()=>load(home(),true);
+$('#js').onclick=()=>{jsOn=!jsOn;$('#js').style.opacity=jsOn?1:.4;toast(jsOn?'JavaScript situs: aktif':'JavaScript situs: nonaktif (lebih stabil)');hist[hi]&&load(hist[hi],false)};
+$('#bk').onclick=()=>{if(hi>0){hi--;load(hist[hi],false)}};
+$('#fw').onclick=()=>{if(hi<hist.length-1){hi++;load(hist[hi],false)}};
+$('#rl').onclick=()=>hist[hi]&&load(hist[hi],false);
+addEventListener('message',e=>{if(e.source!==fr.contentWindow)return;const m=e.data;
+  if(m.t=='page'){clearTimeout(tm);det=m.links||[];badge();$('#url').value=m.url;
+    if(skip){hist[hi]=m.url;skip=false}else if(hist[hi]!==m.url){hist=hist.slice(0,hi+1);hist.push(m.url);hi++}}
+  if(m.t=='dl'){if(m.back&&hist[hi])load(hist[hi],false);askDl(m.url,m.ref)}});
+
+async function askDl(url,ref){pend={url,ref};$('#pName').value='';$('#pInfo').textContent='Memeriksa berkas...';$('#dDl').showModal();
+  const p=await api('/api/probe?u='+encodeURIComponent(url)+'&ref='+encodeURIComponent(ref||''));
+  if(p.error){$('#pInfo').textContent='Tidak bisa dibaca: '+p.error;return}
+  $('#pName').value=p.name;$('#pInfo').textContent=(p.size?fmt(p.size):'Ukuran tidak diketahui')+' · '+(p.ranged?'bisa dilanjutkan (resume)':'tanpa resume')+' · '+p.type}
+$('#pOk').onclick=async()=>{$('#dDl').close();const r=await api('/api/add',{...pend,name:$('#pName').value});toast(r.error?'Gagal: '+r.error:'Ditambahkan ke antrean')};
+$('#dd').onclick=()=>{$('#detList').innerHTML=det.length?det.map((u,i)=>`<div class="dl" data-i="${i}"><span>${icon(u.split('?')[0])}</span><span>${esc(decodeURIComponent(u.split('?')[0].split('/').pop())||u)}<br><small style="color:var(--dim)">${esc(u.slice(0,80))}</small></span></div>`).join(''):'<div class="empty">Tidak ada berkas terdeteksi di halaman ini.</div>';$('#dDet').showModal()};
+$('#detList').onclick=e=>{const d=e.target.closest('[data-i]');if(d){$('#dDet').close();askDl(det[d.dataset.i],hist[hi])}};
+$('#detAll').onclick=async()=>{$('#dDet').close();for(const u of det)await api('/api/add',{url:u,ref:hist[hi]});toast(det.length+' berkas ditambahkan')};
+poll();
+</script></body></html>
