@@ -187,6 +187,15 @@ def act(jid, a, with_file=False):
             threading.Thread(target=rm, daemon=True).start()
     save()
 
+def stats():
+    """[sedang mengunduh, antre, kecepatan total B/d] — dipakai notifikasi layanan Android."""
+    with LOCK:
+        a = q = sp = 0
+        for j in JOBS.values():
+            if j['status'] == 'downloading': a += 1; sp += int(j.get('speed', 0))
+            elif j['status'] == 'queued': q += 1
+        return [a, q, sp]
+
 def stop_wait(j):
     """Hentikan unduhan yang sedang jalan dan tunggu workernya selesai."""
     if j['status'] == 'downloading': FLAG[j['id']] = 'stop'
@@ -297,7 +306,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == '/api/add': self.send(200, {'id': add(d['url'], d.get('name'), d.get('ref', ''), paused=bool(d.get('paused')))})
             elif self.path == '/api/act': act(int(d['id']), d['a'], d.get('file', False)); self.send(200, {'ok': 1})
             elif self.path == '/api/relink': self.send(200, relink(int(d['id']), d['url'], bool(d.get('force'))))
-            elif self.path == '/api/redo': redo(int(d['id'])); self.send(200, {'ok': 1})
+            elif self.path == '/api/redo': redo(int(d['id']), d.get('url') or None); self.send(200, {'ok': 1})
             elif self.path == '/api/rename': self.send(200, {'name': rename(int(d['id']), d['name'])})
             elif self.path == '/api/cfg':
                 CFG.update(dir=d['dir'], parallel=max(1, int(d['parallel'])), segments=min(16, max(1, int(d['segments']))))

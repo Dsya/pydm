@@ -106,7 +106,7 @@ dialog label{display:block;margin:10px 0 4px;color:var(--dim);font-size:13px}
 
 <script>
 const $=s=>document.querySelector(s);
-const api=(p,b)=>fetch(p,b?{method:'POST',body:JSON.stringify(b)}:{}).then(r=>r.json());
+const api=(p,b)=>fetch(p,b?{method:'POST',body:JSON.stringify(b)}:{}).then(r=>r.json()).then(r=>{if(b&&window.Android&&Android.kick)try{Android.kick()}catch(e){}return r});
 let jobs=[],cfg={},tab='all',filter='';
 const TABS=[['all','Semua',j=>1],['dl','Mengunduh',j=>['queued','downloading','paused'].includes(j.status)],
  ['fin','Selesai',j=>j.status=='finished'],['err','Error',j=>['error','stopped'].includes(j.status)]];
@@ -220,7 +220,11 @@ async function menuAct(k,id){const j=jobs.find(x=>x.id==id);if(!j)return;
   if(k=='rename'){const n=await inputD('Ganti nama','Nama berkas',j.name,'Simpan');if(!n||n==j.name)return;
     const r=await api('/api/rename',{id,name:n});return toast(r.error?'Gagal: '+r.error:'Nama diganti')}
   if(k=='redo'){if(!await confirmD('Unduh ulang?','Berkas dan bagian yang sudah diunduh akan dihapus, lalu unduhan dimulai dari awal.','Unduh ulang'))return;
-    toast('Memeriksa link...');const r=await api('/api/redo',{id});return toast(r.error?'Gagal: '+r.error:'Mengunduh ulang dari awal')}
+    toast('Memeriksa link...');let r=await api('/api/redo',{id});
+    if(r.error&&r.error.startsWith('Link tidak bisa dibuka')){
+      const u=await inputD('Link lama tidak bisa dibuka','Tempel link unduhan yang baru untuk unduh ulang','','Unduh ulang');if(!u)return;
+      toast('Memeriksa link...');r=await api('/api/redo',{id,url:u})}
+    return toast(r.error?'Gagal: '+r.error:'Mengunduh ulang dari awal')}
   if(k=='relink'){const u=await inputD('Perbarui link','Tempel link unduhan yang baru','', 'Perbarui');if(!u)return;
     toast('Memeriksa link...');let r=await api('/api/relink',{id,url:u});
     if(r.mismatch){if(!await confirmD('Ukuran berkas beda','Ukuran berkas lama '+(r.old?fmt(r.old):'tidak diketahui')+', link baru '+(r.new?fmt(r.new):'tidak diketahui')+'. Bagian lama tidak bisa dilanjutkan. Unduh ulang dari awal dengan link baru?','Unduh ulang'))return;

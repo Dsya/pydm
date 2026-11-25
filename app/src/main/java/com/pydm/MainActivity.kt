@@ -4,6 +4,7 @@ import android.Manifest
 import android.animation.ValueAnimator
 import android.app.*
 import android.content.*
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
@@ -119,6 +120,12 @@ class MainActivity : Activity() {
     private lateinit var tabsList: LinearLayout
     private lateinit var bmList: LinearLayout
     private lateinit var tabsDrawer: SwipePanel
+    private lateinit var fsHolder: FrameLayout
+    private lateinit var bmTabB: Button
+    private lateinit var bmTabH: Button
+    private var bmMode = 0   // 0 = bookmark, 1 = riwayat
+    private var fsView: View? = null
+    private var fsCb: WebChromeClient.CustomViewCallback? = null
     private lateinit var bmDrawer: SwipePanel
     @Volatile private var blockAds = true
     private var askedN = false
@@ -128,6 +135,7 @@ class MainActivity : Activity() {
     inner class Bridge {
         @JavascriptInterface fun openBrowser() { runOnUiThread { show(true) } }
         @JavascriptInterface fun openFolder(path: String) { runOnUiThread { openFolderAt(path) } }
+        @JavascriptInterface fun kick() { Engine.ensureService(applicationContext) }
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -238,10 +246,18 @@ class MainActivity : Activity() {
         val bcol = LinearLayout(this)
         bcol.orientation = LinearLayout.VERTICAL
         bcol.setBackgroundColor(Color.parseColor("#2B2B2B"))
-        bcol.addView(header("⭐  Bookmark"), -1, -2)
+        bmTabB = btn("⭐ Bookmark", 15f) { bmMode = 0; rebuildBm() }
+        bmTabH = btn("🕘 Riwayat", 15f) { bmMode = 1; rebuildBm() }
+        val bmTabs = LinearLayout(this)
+        bmTabs.gravity = Gravity.CENTER_VERTICAL
+        bmTabs.setPadding(dp(4), dp(4), dp(4), dp(4))
+        bmTabs.addView(bmTabB, lp(0, 1f))
+        bmTabs.addView(bmTabH, lp(0, 1f))
+        bcol.addView(bmTabs, -1, -2)
         val bscroll = ScrollView(this)
         bscroll.addView(bmList, -1, -2)
         bcol.addView(bscroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        bcol.addView(btn("🧹  Hapus data", 15f) { clearDataDialog() }, -1, -2)
         bmDrawer = SwipePanel(this, bcol, false, dw)
 
         // ---------- strip tepi layar untuk geser ----------
@@ -252,11 +268,15 @@ class MainActivity : Activity() {
         tabsDrawer.root.getChildAt(0).setOnTouchListener(dragListener(tabsDrawer, true, true))
         bmDrawer.root.getChildAt(0).setOnTouchListener(dragListener(bmDrawer, false, true))
 
+        fsHolder = FrameLayout(this)
+        fsHolder.setBackgroundColor(Color.BLACK)
+        fsHolder.visibility = View.GONE
         setContentView(FrameLayout(this).apply {
             addView(ui, -1, -1)
             addView(box, -1, -1)
             addView(tabsDrawer.root, -1, -1)
             addView(bmDrawer.root, -1, -1)
+            addView(fsHolder, -1, -1)
         })
 
         openTab(null)   // tab pertama; halaman dimuat saat browser dibuka
@@ -299,6 +319,7 @@ class MainActivity : Activity() {
             override fun onPageFinished(v: WebView, u: String) {
                 if (blockAds) v.evaluateJavascript(HIDE_JS, null)
                 t.title = v.title ?: u
+                addHist(t.title, u)
                 if (t === cur) paintStar()
                 rebuildTabs()
             }
@@ -321,8 +342,15 @@ class MainActivity : Activity() {
         w.webChromeClient = object : WebChromeClient() {
             override fun onReceivedTitle(v: WebView, ti: String?) {
                 t.title = ti ?: ""
+                updateHistTitle(v.url, ti)
                 rebuildTabs()
             }
+            override fun onShowCustomView(view: View?, callback: WebChromeClient.CustomViewCallback?) {
+                if (view == null || callback == null) return
+                enterFs(view, callback)
+            }
+            override fun onHideCustomView() { exitFs() }
+            override fun getDefaultVideoPoster(): Bitmap? = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
             override fun onCreateWindow(v: WebView, d: Boolean, g: Boolean, m: Message): Boolean {
                 if (blockAds && !g) { toast("Popup diblokir"); return false }  // popup tanpa ketukan
                 val tmp = WebView(this@MainActivity)
@@ -429,6 +457,9 @@ class MainActivity : Activity() {
 
     private fun rebuildBm() {
         if (!::bmList.isInitialized) return
+        bmTabB.setTextColor(if (bmMode == 0) Color.parseColor("#FFC107") else Color.WHITE)
+        bmTabH.setTextColor(if (bmMode == 1) Color.parseColor("#FFC107") else Color.WHITE)
+        if (bmMode == 1) { rebuildHist(); return }
         bmList.removeAllViews()
         val l = loadBm()
         if (l.isEmpty()) {
@@ -466,6 +497,144 @@ class MainActivity : Activity() {
         }
     }
 
+    // ---------- riwayat ----------
+    private fun loadHist(): MutableList<Triple<String, String, Long>> {
+        val out = mutableListOf<Triple<String, String, Long>>()
+        try {
+            val a = JSONArray(getSharedPreferences("pydm", MODE_PRIVATE).getString("hist", "[]") ?: "[]")
+            for (i in 0 until a.length()) {
+                val o = a.getJSONObject(i)
+                out.add(Triple(o.optString("t"), o.optString("u"), o.optLong("ts")))
+            }
+        } catch (e: Exception) { }
+        return out
+    }
+
+    private fun saveHist(l: List<Triple<String, String, Long>>) {
+        val a = JSONArray()
+        for (h in l) a.put(JSONObject().put("t", h.first).put("u", h.second).put("ts", h.third))
+        getSharedPreferences("pydm", MODE_PRIVATE).edit().putString("hist", a.toString()).apply()
+    }
+
+    private fun addHist(title: String, u: String) {
+        if (!u.startsWith("http")) return
+        val l = loadHist()
+        if (l.isNotEmpty() && l[0].second == u) l.removeAt(0)
+        l.add(0, Triple(if (title.isBlank()) u else title, u, System.currentTimeMillis()))
+        while (l.size > 500) l.removeAt(l.size - 1)
+        saveHist(l)
+        if (bmMode == 1 && ::bmDrawer.isInitialized && bmDrawer.showing) rebuildBm()
+    }
+
+    // Judul sering baru tiba setelah halaman selesai: perbarui entri teratas bila URL-nya sama
+    private fun updateHistTitle(u: String?, ti: String?) {
+        if (u == null || ti.isNullOrBlank()) return
+        val l = loadHist()
+        if (l.isNotEmpty() && l[0].second == u && l[0].first != ti) {
+            l[0] = Triple(ti, u, l[0].third)
+            saveHist(l)
+        }
+    }
+
+    private fun rebuildHist() {
+        bmList.removeAllViews()
+        val l = loadHist()
+        if (l.isEmpty()) {
+            val e = TextView(this)
+            e.text = "Belum ada riwayat."
+            e.setTextColor(Color.GRAY); e.setPadding(dp(16), dp(16), dp(16), dp(16))
+            bmList.addView(e, -1, -2)
+            return
+        }
+        val df = java.text.SimpleDateFormat("d MMM, HH:mm", java.util.Locale("id", "ID"))
+        for (h in l) {
+            val col = LinearLayout(this)
+            col.orientation = LinearLayout.VERTICAL
+            col.setPadding(dp(16), dp(10), dp(16), dp(10))
+            val t1 = TextView(this)
+            t1.text = h.first
+            t1.setTextColor(Color.WHITE); t1.textSize = 15f
+            t1.setSingleLine(); t1.setEllipsize(TextUtils.TruncateAt.END)
+            val t2 = TextView(this)
+            t2.text = df.format(java.util.Date(h.third)) + "  •  " + (Uri.parse(h.second).host ?: h.second)
+            t2.setTextColor(Color.GRAY); t2.textSize = 12f
+            t2.setSingleLine(); t2.setEllipsize(TextUtils.TruncateAt.END)
+            col.addView(t1, -1, -2)
+            col.addView(t2, -1, -2)
+            col.setOnClickListener { cur.web.loadUrl(h.second); bmDrawer.close() }
+            col.setOnLongClickListener {
+                AlertDialog.Builder(this).setMessage("Hapus dari riwayat?")
+                    .setPositiveButton("Hapus") { _, _ ->
+                        val cp = loadHist()
+                        cp.removeAll { it.third == h.third && it.second == h.second }
+                        saveHist(cp); rebuildBm()
+                    }
+                    .setNegativeButton("Batal", null).show()
+                true
+            }
+            bmList.addView(col, -1, -2)
+        }
+    }
+
+    // ---------- hapus data ----------
+    private fun clearDataDialog() {
+        val items = arrayOf("Cache (berkas halaman yang disimpan)", "Cookie & data situs (akan keluar dari akun)", "Riwayat penelusuran")
+        val sel = booleanArrayOf(true, false, true)
+        AlertDialog.Builder(this).setTitle("Hapus data")
+            .setMultiChoiceItems(items, sel) { _, i, c -> sel[i] = c }
+            .setPositiveButton("Hapus") { _, _ -> clearData(sel[0], sel[1], sel[2]) }
+            .setNegativeButton("Batal", null).show()
+    }
+
+    private fun clearData(cache: Boolean, cookies: Boolean, hist: Boolean) {
+        if (!cache && !cookies && !hist) { toast("Tidak ada yang dipilih"); return }
+        if (cache) for (t in tabs) t.web.clearCache(true)
+        if (cookies) {
+            CookieManager.getInstance().removeAllCookies(null)
+            CookieManager.getInstance().flush()
+            WebStorage.getInstance().deleteAllData()
+        }
+        if (hist) { getSharedPreferences("pydm", MODE_PRIVATE).edit().remove("hist").apply(); rebuildBm() }
+        toast("Data dihapus")
+    }
+
+    // ---------- fullscreen video ----------
+    private fun enterFs(v: View, cb: WebChromeClient.CustomViewCallback) {
+        if (fsView != null) { cb.onCustomViewHidden(); return }
+        fsView = v; fsCb = cb
+        fsHolder.addView(v, FrameLayout.LayoutParams(-1, -1))
+        fsHolder.visibility = View.VISIBLE
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        immersive(true)
+    }
+
+    private fun exitFs() {
+        val v = fsView ?: return
+        fsView = null
+        fsHolder.removeView(v)
+        fsHolder.visibility = View.GONE
+        fsCb?.onCustomViewHidden()
+        fsCb = null
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        immersive(false)
+    }
+
+    private fun immersive(on: Boolean) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            val c = window.insetsController ?: return
+            if (on) {
+                c.hide(WindowInsets.Type.systemBars())
+                c.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            } else c.show(WindowInsets.Type.systemBars())
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = if (on)
+                View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            else 0
+        }
+    }
+
     // ---------- umum ----------
     override fun onResume() { super.onResume(); step() }
     override fun onRequestPermissionsResult(c: Int, p: Array<String>, r: IntArray) { super.onRequestPermissionsResult(c, p, r); step() }
@@ -482,14 +651,13 @@ class MainActivity : Activity() {
             else requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 2)
             return
         }
-        val i = Intent(this, DownloadService::class.java)
-        if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+        Engine.start(this)
         if (ui.url == null) ui.loadUrl(HOME_UI)
     }
 
     private fun show(on: Boolean) {
         box.visibility = if (on) View.VISIBLE else View.GONE
-        if (!on) { tabsDrawer.moveTo(0f); bmDrawer.moveTo(0f) }
+        if (!on) { exitFs(); tabsDrawer.moveTo(0f); bmDrawer.moveTo(0f) }
         if (on && cur.web.url == null) go(HOME_WEB)
     }
 
@@ -602,6 +770,7 @@ class MainActivity : Activity() {
         Thread {
             try {
                 Python.getInstance().getModule("server").callAttr("add", u, name, ref, ck, ua, paused)
+                if (!paused) Engine.ensureService(applicationContext)
                 toast(if (paused) "Ditambahkan ke daftar (jeda)" else "Ditambahkan ke antrean")
             } catch (e: Exception) { toast("Gagal: " + (e.message ?: "").take(150)) }
         }.start()
@@ -618,6 +787,7 @@ class MainActivity : Activity() {
                 try { srv.callAttr("add", u, URLUtil.guessFileName(u, null, null), ref, cks[i], ua, paused); ok++ }
                 catch (e: Exception) { }
             }
+            if (!paused && ok > 0) Engine.ensureService(applicationContext)
             toast("$ok dari ${urls.size} berkas " + if (paused) "ditambahkan ke daftar" else "masuk antrean")
         }.start()
     }
@@ -625,6 +795,7 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         when {
+            fsView != null -> exitFs()
             tabsDrawer.showing -> tabsDrawer.close()
             bmDrawer.showing -> bmDrawer.close()
             box.visibility == View.VISIBLE -> if (cur.web.canGoBack()) cur.web.goBack() else show(false)
@@ -634,31 +805,93 @@ class MainActivity : Activity() {
     }
 }
 
+// Mesin unduhan: server Python hidup di proses aplikasi. Layanan (notifikasi) hanya menyala saat ada unduhan.
+object Engine {
+    private var started = false
+
+    @Synchronized fun start(ctx: Context) {
+        if (started) return
+        started = true
+        val app = ctx.applicationContext
+        Thread {
+            File(app.filesDir, "index.html").outputStream().use { o -> app.assets.open("index.html").use { it.copyTo(o) } }
+            val dl = if (storageOk(app)) File(Environment.getExternalStorageDirectory(), "Download/PyDM").path
+                     else File(app.getExternalFilesDir(null) ?: app.filesDir, "PyDM").path
+            Python.getInstance().getModule("server").callAttr("run", app.filesDir.path, dl, "127.0.0.1", 8080)
+        }.start()
+        // Pemantau: bila ada unduhan berjalan/antre, pastikan layanan latar menyala
+        Thread {
+            while (true) {
+                try { Thread.sleep(1000) } catch (e: InterruptedException) { return@Thread }
+                if (DownloadService.running) continue
+                val s = stats()
+                if (s[0] + s[1] > 0) ensureService(app)
+            }
+        }.apply { isDaemon = true; start() }
+    }
+
+    // [sedang mengunduh, antre, kecepatan total B/d]
+    fun stats(): IntArray = try {
+        val l = Python.getInstance().getModule("server").callAttr("stats").asList()
+        intArrayOf(l[0].toInt(), l[1].toInt(), l[2].toInt())
+    } catch (e: Exception) { intArrayOf(0, 0, 0) }
+
+    fun ensureService(ctx: Context) {
+        if (DownloadService.running) return
+        try {
+            val i = Intent(ctx, DownloadService::class.java)
+            if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i) else ctx.startService(i)
+        } catch (e: Exception) { }   // mis. aplikasi di latar belakang: dicoba lagi oleh pemantau
+    }
+}
+
 class DownloadService : Service() {
-    companion object { @Volatile var started = false }
+    companion object { @Volatile var running = false }
+    private var wake: PowerManager.WakeLock? = null
+    @Volatile private var alive = false
     override fun onBind(i: Intent?): IBinder? = null
+
+    private fun notif(text: String): Notification {
+        val pi = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "dm") else Notification.Builder(this)
+        return b.setContentTitle("PyDM").setContentText(text).setOnlyAlertOnce(true)
+            .setSmallIcon(android.R.drawable.stat_sys_download).setContentIntent(pi).build()
+    }
 
     override fun onStartCommand(i: Intent?, f: Int, id: Int): Int {
         val nm = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26)
             nm.createNotificationChannel(NotificationChannel("dm", "PyDM", NotificationManager.IMPORTANCE_LOW))
-        val pi = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "dm") else Notification.Builder(this)
-        val n = b.setContentTitle("PyDM aktif").setContentText("Mesin unduhan berjalan")
-            .setSmallIcon(android.R.drawable.stat_sys_download).setContentIntent(pi).build()
-        if (Build.VERSION.SDK_INT >= 29) startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        else startForeground(1, n)
-        if (!started) {
-            started = true
-            (getSystemService(POWER_SERVICE) as PowerManager)
+        val first = notif("Menyiapkan unduhan…")
+        if (Build.VERSION.SDK_INT >= 29) startForeground(1, first, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        else startForeground(1, first)
+        if (!alive) {
+            alive = true; running = true
+            wake = (getSystemService(POWER_SERVICE) as PowerManager)
                 .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "pydm:dl").apply { setReferenceCounted(false); acquire() }
             Thread {
-                assets.open("index.html").use { a -> File(filesDir, "index.html").outputStream().use { a.copyTo(it) } }
-                val dl = if (storageOk(this)) File(Environment.getExternalStorageDirectory(), "Download/PyDM").path
-                         else File(getExternalFilesDir(null) ?: filesDir, "PyDM").path
-                Python.getInstance().getModule("server").callAttr("run", filesDir.path, dl, "127.0.0.1", 8080)
+                var idle = 0
+                var last = ""
+                while (alive) {
+                    val s = Engine.stats()
+                    if (s[0] + s[1] == 0) idle++ else idle = 0
+                    if (idle >= 3) break   // tidak ada unduhan lagi: matikan layanan dan notifikasi
+                    var text = "${s[0]} mengunduh • ${Formatter.formatFileSize(this, s[2].toLong())}/d"
+                    if (s[1] > 0) text += " • ${s[1]} antre"
+                    if (text != last) { last = text; nm.notify(1, notif(text)) }
+                    try { Thread.sleep(1000) } catch (e: InterruptedException) { break }
+                }
+                running = false
+                stopSelf()
             }.start()
         }
-        return START_STICKY
+        return START_NOT_STICKY
+    }
+
+    override fun onDestroy() {
+        alive = false; running = false
+        wake?.let { if (it.isHeld) it.release() }
+        wake = null
+        super.onDestroy()
     }
 }
