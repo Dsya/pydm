@@ -47,7 +47,7 @@ class MainActivity : Activity() {
     private lateinit var ui: WebView
     private lateinit var br: WebView
     private lateinit var box: LinearLayout
-    private lateinit var url: EditText
+    private lateinit var urlBar: EditText
     private lateinit var badge: Button
     private lateinit var adBtn: Button
     @Volatile private var blockAds = true
@@ -78,7 +78,7 @@ class MainActivity : Activity() {
             settings.javaScriptEnabled = true; settings.domStorageEnabled = true
             CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
             webViewClient = object : WebViewClient() {
-                override fun onPageStarted(v: WebView, u: String, f: Bitmap?) { found.clear(); refresh(); url.setText(u) }
+                override fun onPageStarted(v: WebView, u: String, f: Bitmap?) { found.clear(); refresh(); urlBar.setText(u) }
                 override fun onPageFinished(v: WebView, u: String) { if (blockAds) v.evaluateJavascript(HIDE_JS, null) }
                 override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
                     if (!blockAds) return false
@@ -114,7 +114,7 @@ class MainActivity : Activity() {
             text = t; setTextColor(Color.WHITE); setBackgroundColor(Color.TRANSPARENT)
             minimumWidth = 0; setPadding(18, 0, 18, 0); setOnClickListener { f() }
         }
-        url = EditText(this).apply {
+        urlBar = EditText(this).apply {
             setSingleLine(); setTextColor(Color.WHITE); textSize = 14f
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             imeOptions = EditorInfo.IME_ACTION_GO; hint = "Ketik alamat atau cari"
@@ -127,7 +127,7 @@ class MainActivity : Activity() {
             addView(btn("🏠") { go("https://www.google.com/") })
             addView(btn("←") { if (br.canGoBack()) br.goBack() })
             addView(btn("→") { if (br.canGoForward()) br.goForward() })
-            addView(url, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(urlBar, LinearLayout.LayoutParams(0, -2, 1f))
             addView(btn("⟳") { br.reload() })
             addView(adBtn)
             addView(badge)
