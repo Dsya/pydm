@@ -25,7 +25,15 @@ input,textarea,select{font:inherit;color:var(--tx);background:#2c2c2c;border:1px
 .pb i{display:block;height:100%;background:var(--pg)}
 .meta{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--dim)}
 .it.fin .meta{color:#bcd}.er{color:var(--er)}
-.btns{display:flex}.btns button{font-size:18px;padding:6px}
+.btns{display:flex;align-items:center}.btns button{font-size:20px;padding:10px 12px;min-width:44px;min-height:44px}
+#mscrim{position:fixed;inset:0;z-index:30;display:none}
+#menu{position:fixed;z-index:31;background:#2b2b2b;border:1px solid #444;border-radius:10px;min-width:210px;max-width:86vw;padding:6px 0;box-shadow:0 6px 20px #000c;display:none}
+#menu button{display:block;width:100%;text-align:left;padding:13px 18px;font-size:15px}
+#menu button:active{background:#3c3c3c}#menu .dg{color:var(--er)}
+.act .alt{margin-right:auto}
+.kv{display:grid;grid-template-columns:96px 1fr;gap:8px 10px;font-size:13px;max-height:60vh;overflow-y:auto}
+.kv b{color:var(--dim);font-weight:400}.kv span{word-break:break-all}
+.chk{display:flex;align-items:center;gap:10px;margin-top:14px;color:var(--tx);font-size:14px}.chk input{width:20px;height:20px;padding:0}
 .empty{text-align:center;color:var(--dim);padding:60px 20px}
 .fab{position:fixed;right:18px;bottom:calc(22px + env(safe-area-inset-bottom));width:58px;height:58px;border-radius:50%;background:var(--ok);color:#fff;font-size:32px;box-shadow:0 3px 10px #000a;padding:0}
 #br{position:fixed;inset:0;background:var(--bg);display:none;flex-direction:column;padding-top:env(safe-area-inset-top);z-index:5}
@@ -65,14 +73,14 @@ dialog label{display:block;margin:10px 0 4px;color:var(--dim);font-size:13px}
 <dialog id="dAdd"><h2>Tambah unduhan</h2>
   <label>Alamat berkas (satu per baris)</label><textarea id="aUrl" rows="4" placeholder="https://..."></textarea>
   <label>Nama berkas (opsional, untuk satu alamat)</label><input id="aName">
-  <div class="act"><button data-close>Batal</button><button class="p" id="aOk">Unduh</button></div></dialog>
+  <div class="act"><button data-close>Batal</button><button id="aLater">Tambah ke daftar</button><button class="p" id="aOk">Unduh</button></div></dialog>
 
 <dialog id="dDl"><h2>Unduh berkas ini?</h2>
   <label>Nama berkas</label><input id="pName"><p id="pInfo" style="color:var(--dim);font-size:13px;word-break:break-all"></p>
-  <div class="act"><button data-close>Batal</button><button class="p" id="pOk">Unduh</button></div></dialog>
+  <div class="act"><button data-close>Batal</button><button id="pLater">Tambah ke daftar</button><button class="p" id="pOk">Unduh</button></div></dialog>
 
 <dialog id="dDet"><h2>Berkas di halaman ini</h2><div id="detList"></div>
-  <div class="act"><button data-close>Tutup</button><button class="p" id="detAll">Unduh semua</button></div></dialog>
+  <div class="act"><button data-close>Tutup</button><button id="detLater">Tambah semua</button><button class="p" id="detAll">Unduh semua</button></div></dialog>
 
 <dialog id="dCfg"><h2>Pengaturan</h2>
   <label>Mesin pencari browser</label><select id="cEng"></select>
@@ -80,6 +88,20 @@ dialog label{display:block;margin:10px 0 4px;color:var(--dim);font-size:13px}
   <label>Unduhan bersamaan</label><input id="cPar" type="number" min="1" max="10">
   <label>Segmen per berkas (kecepatan)</label><input id="cSeg" type="number" min="1" max="16">
   <div class="act"><button data-close>Batal</button><button class="p" id="cOk">Simpan</button></div></dialog>
+<div id="mscrim"></div><div id="menu"></div>
+
+<dialog id="dInp"><h2 id="iT"></h2><label id="iL"></label><input id="iV" autocapitalize="off" autocorrect="off">
+  <div class="act"><button data-close>Batal</button><button class="p" id="iOk">OK</button></div></dialog>
+
+<dialog id="dCnf"><h2 id="cT"></h2><p id="cM" style="margin:0;color:var(--dim);font-size:14px;line-height:1.45"></p>
+  <div class="act"><button data-close>Batal</button><button class="p" id="cfOk">OK</button></div></dialog>
+
+<dialog id="dDel"><h2>Hapus unduhan?</h2><p id="xN" style="margin:0;color:var(--dim);font-size:14px;word-break:break-all"></p>
+  <label class="chk"><input type="checkbox" id="xFile">Hapus juga berkas dari penyimpanan</label>
+  <div class="act"><button data-close>Batal</button><button class="p" id="xOk" style="background:#c62828">Hapus</button></div></dialog>
+
+<dialog id="dPr"><h2>Properti</h2><div class="kv" id="prBody"></div>
+  <div class="act"><button data-close>Tutup</button></div></dialog>
 <div id="toast"></div>
 
 <script>
@@ -102,7 +124,7 @@ function render(){
     const p=j.size?Math.min(100,j.done/j.size*100):(j.status=='finished'?100:0), s=j.status;
     const left=j.speed&&j.size?eta((j.size-j.done)/j.speed):'';
     const b=(a,i)=>`<button data-a="${a}" data-id="${j.id}">${i}</button>`;
-    const btn=(s=='downloading'||s=='queued'?b('pause','⏸')+b('stop','⏹'):s=='finished'?`<a href="/file/${j.id}" download style="text-decoration:none"><button>💾</button></a>`:b('resume','▶️'))+b('delete','🗑️');
+    const btn=(s=='downloading'||s=='queued'?b('pause','⏸'):s=='finished'?`<a href="/file/${j.id}" download style="text-decoration:none"><button>💾</button></a>`:b('resume','▶️'))+`<button data-menu="${j.id}" title="Menu">⋮</button>`;
     return `<div class="it ${s=='finished'?'fin':''}"><div class="ic">${icon(j.name)}</div><div class="mid"><div class="nm">${esc(j.name)}</div>
       ${s=='finished'?'':`<div class="pb"><i style="width:${p}%"></i></div>`}
       <div class="meta"><span>${s=='finished'?fmt(j.size):fmt(j.done)+(j.size?' / '+fmt(j.size):'')}</span>
@@ -113,16 +135,17 @@ const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',
 async function poll(){try{const d=await api('/api/list');jobs=d.jobs;cfg=d.cfg;render()}catch(e){}setTimeout(poll,1000)}
 
 $('#tabs').onclick=e=>{const t=e.target.dataset.t;if(t){tab=t;render()}};
-$('#list').onclick=async e=>{const b=e.target.closest('[data-a]');if(!b)return;const a=b.dataset.a,id=+b.dataset.id;let file=false;
-  if(a=='delete'){if(!confirm('Hapus dari daftar?'))return;file=confirm('Hapus juga berkas yang sudah diunduh?')}
-  await api('/api/act',{id,a,file})};
+$('#list').onclick=async e=>{
+  const m=e.target.closest('[data-menu]');if(m){openMenu(+m.dataset.menu,m);return}
+  const b=e.target.closest('[data-a]');if(!b)return;await api('/api/act',{id:+b.dataset.id,a:b.dataset.a})};
 $('#bs').onclick=()=>{const q=$('#q');const on=q.style.display!='block';q.style.display=on?'block':'none';$('#ttl').style.display=on?'none':'';if(on)q.focus();else{q.value='';filter='';render()}};
 $('#q').oninput=e=>{filter=e.target.value.toLowerCase();render()};
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close());
 
 $('#fab').onclick=()=>{$('#aUrl').value='';$('#aName').value='';$('#dAdd').showModal()};
-$('#aOk').onclick=async()=>{const us=$('#aUrl').value.split('\n').map(s=>s.trim()).filter(Boolean);$('#dAdd').close();
-  for(const u of us){const r=await api('/api/add',{url:u,name:us.length==1?$('#aName').value:''});toast(r.error?'Gagal: '+r.error:'Ditambahkan ke antrean')}};
+async function addUrls(paused){const us=$('#aUrl').value.split('\n').map(s=>s.trim()).filter(Boolean);$('#dAdd').close();
+  for(const u of us){const r=await api('/api/add',{url:u,name:us.length==1?$('#aName').value:'',paused});toast(r.error?'Gagal: '+r.error:paused?'Ditambahkan ke daftar (jeda)':'Ditambahkan ke antrean')}}
+$('#aOk').onclick=()=>addUrls(false);$('#aLater').onclick=()=>addUrls(true);
 $('#bc').onclick=()=>{$('#cEng').value=eng;$('#cDir').value=cfg.dir;$('#cPar').value=cfg.parallel;$('#cSeg').value=cfg.segments;$('#dCfg').showModal()};
 $('#cOk').onclick=async()=>{eng=$('#cEng').value;try{localStorage.setItem('eng',eng)}catch(e){}await api('/api/cfg',{dir:$('#cDir').value,parallel:$('#cPar').value,segments:$('#cSeg').value});$('#dCfg').close();toast('Pengaturan disimpan')};
 
@@ -157,9 +180,59 @@ async function askDl(url,ref){pend={url,ref};$('#pName').value='';$('#pInfo').te
   const p=await api('/api/probe?u='+encodeURIComponent(url)+'&ref='+encodeURIComponent(ref||''));
   if(p.error){$('#pInfo').textContent='Tidak bisa dibaca: '+p.error;return}
   $('#pName').value=p.name;$('#pInfo').textContent=(p.size?fmt(p.size):'Ukuran tidak diketahui')+' · '+(p.ranged?'bisa dilanjutkan (resume)':'tanpa resume')+' · '+p.type}
-$('#pOk').onclick=async()=>{$('#dDl').close();const r=await api('/api/add',{...pend,name:$('#pName').value});toast(r.error?'Gagal: '+r.error:'Ditambahkan ke antrean')};
+async function addPend(paused){$('#dDl').close();const r=await api('/api/add',{...pend,name:$('#pName').value,paused});toast(r.error?'Gagal: '+r.error:paused?'Ditambahkan ke daftar (jeda)':'Ditambahkan ke antrean')}
+$('#pOk').onclick=()=>addPend(false);$('#pLater').onclick=()=>addPend(true);
 $('#dd').onclick=()=>{$('#detList').innerHTML=det.length?det.map((u,i)=>`<div class="dl" data-i="${i}"><span>${icon(u.split('?')[0])}</span><span>${esc(decodeURIComponent(u.split('?')[0].split('/').pop())||u)}<br><small style="color:var(--dim)">${esc(u.slice(0,80))}</small></span></div>`).join(''):'<div class="empty">Tidak ada berkas terdeteksi di halaman ini.</div>';$('#dDet').showModal()};
 $('#detList').onclick=e=>{const d=e.target.closest('[data-i]');if(d){$('#dDet').close();askDl(det[d.dataset.i],hist[hi])}};
-$('#detAll').onclick=async()=>{$('#dDet').close();for(const u of det)await api('/api/add',{url:u,ref:hist[hi]});toast(det.length+' berkas ditambahkan')};
+async function addDet(paused){$('#dDet').close();for(const u of det)await api('/api/add',{url:u,ref:hist[hi],paused});toast(det.length+(paused?' berkas ditambahkan ke daftar':' berkas masuk antrean'))}
+$('#detAll').onclick=()=>addDet(false);$('#detLater').onclick=()=>addDet(true);
+
+/* ---- menu ⋮ per unduhan ---- */
+function modal(d,setup){return new Promise(res=>{setup&&setup();d.returnValue='';d.onclose=()=>res(d.returnValue);d.showModal()})}
+const confirmD=(t,m,ok)=>modal($('#dCnf'),()=>{$('#cT').textContent=t;$('#cM').textContent=m;$('#cfOk').textContent=ok||'OK'}).then(v=>v=='ok');
+const inputD=(t,l,v,ok)=>modal($('#dInp'),()=>{$('#iT').textContent=t;$('#iL').textContent=l;$('#iV').value=v;$('#iOk').textContent=ok||'OK'}).then(r=>r=='ok'?$('#iV').value.trim():null);
+$('#cfOk').onclick=()=>$('#dCnf').close('ok');$('#iOk').onclick=()=>$('#dInp').close('ok');$('#xOk').onclick=()=>$('#dDel').close('ok');
+$('#iV').onkeydown=e=>{if(e.key=='Enter')$('#dInp').close('ok')};
+function copyText(t){try{if(navigator.clipboard&&navigator.clipboard.writeText)return navigator.clipboard.writeText(t).catch(()=>fbCopy(t))}catch(e){}fbCopy(t)}
+function fbCopy(t){const a=document.createElement('textarea');a.value=t;a.style.cssText='position:fixed;opacity:0';document.body.appendChild(a);a.select();try{document.execCommand('copy')}catch(e){}a.remove()}
+const MENU_HIDE=()=>{$('#menu').style.display='none';$('#mscrim').style.display='none'};
+$('#mscrim').onclick=MENU_HIDE;
+function openMenu(id,btn){const j=jobs.find(x=>x.id==id);if(!j)return;
+  const s=j.status,run=s=='downloading'||s=='queued',fin=s=='finished',it=[];
+  if(run){it.push(['pause','Jeda']);it.push(['stop','Hentikan'])}
+  else if(!fin)it.push(['resume',s=='paused'&&!j.done?'Mulai':'Lanjutkan']);
+  it.push(['folder','Buka folder']);
+  if(s!='downloading')it.push(['rename','Ganti nama']);
+  it.push(['copy','Salin link unduhan']);
+  if(!fin)it.push(['relink','Perbarui link']);
+  it.push(['redo','Unduh ulang']);it.push(['props','Properti']);it.push(['del','Hapus','dg']);
+  const m=$('#menu');m.innerHTML=it.map(([k,l,c])=>`<button data-m="${k}" class="${c||''}">${l}</button>`).join('');
+  m.style.display='block';$('#mscrim').style.display='block';
+  const r=btn.getBoundingClientRect(),h=m.offsetHeight;
+  m.style.right=Math.max(8,innerWidth-r.right)+'px';m.style.left='auto';
+  m.style.top=Math.max(8,r.bottom+h>innerHeight-8?r.top-h:r.bottom)+'px';
+  m.onclick=ev=>{const b=ev.target.closest('[data-m]');if(!b)return;MENU_HIDE();menuAct(b.dataset.m,id)}}
+async function menuAct(k,id){const j=jobs.find(x=>x.id==id);if(!j)return;
+  if(k=='pause'||k=='stop'||k=='resume')return api('/api/act',{id,a:k});
+  if(k=='folder'){if(window.Android&&Android.openFolder)Android.openFolder(j.dir);else{copyText(j.dir);toast('Folder: '+j.dir)}return}
+  if(k=='copy'){copyText(j.url);return toast('Link unduhan disalin')}
+  if(k=='props')return showProps(j);
+  if(k=='rename'){const n=await inputD('Ganti nama','Nama berkas',j.name,'Simpan');if(!n||n==j.name)return;
+    const r=await api('/api/rename',{id,name:n});return toast(r.error?'Gagal: '+r.error:'Nama diganti')}
+  if(k=='redo'){if(!await confirmD('Unduh ulang?','Berkas dan bagian yang sudah diunduh akan dihapus, lalu unduhan dimulai dari awal.','Unduh ulang'))return;
+    toast('Memeriksa link...');const r=await api('/api/redo',{id});return toast(r.error?'Gagal: '+r.error:'Mengunduh ulang dari awal')}
+  if(k=='relink'){const u=await inputD('Perbarui link','Tempel link unduhan yang baru','', 'Perbarui');if(!u)return;
+    toast('Memeriksa link...');let r=await api('/api/relink',{id,url:u});
+    if(r.mismatch){if(!await confirmD('Ukuran berkas beda','Ukuran berkas lama '+(r.old?fmt(r.old):'tidak diketahui')+', link baru '+(r.new?fmt(r.new):'tidak diketahui')+'. Bagian lama tidak bisa dilanjutkan. Unduh ulang dari awal dengan link baru?','Unduh ulang'))return;
+      r=await api('/api/relink',{id,url:u,force:true})}
+    return toast(r.error?'Gagal: '+r.error:r.redo?'Mengunduh ulang dengan link baru':'Link diperbarui, unduhan dilanjutkan')}
+  if(k=='del'){$('#xN').textContent=j.name;$('#xFile').checked=false;
+    if(await modal($('#dDel'))=='ok'){await api('/api/act',{id,a:'delete',file:$('#xFile').checked});toast('Dihapus')}}}
+const tgl=t=>t?new Date(t*1000).toLocaleString('id-ID'):'-';
+function showProps(j){const act=Math.max(1,j.active||0),fin=j.status=='finished',got=fin?j.size:j.done;
+  const rows=[['Nama',j.name],['Halaman',j.ref||'-'],['Link unduhan',j.url],['Lokasi',j.dir],['Status',ST[j.status]+(j.status=='error'&&j.error?': '+j.error:'')],
+   ['Resume',j.ranged?'Ya':'Tidak'],['Ukuran',j.size?fmt(j.size)+' ('+j.size+' bita)':'Tidak diketahui'],['Terunduh',fmt(got)+(j.size&&!fin?' ('+Math.floor(got/j.size*100)+'%)':'')],
+   ['Kecepatan rata-rata',j.active?fmt(got/act)+'/d':'-'],['Ditambahkan',tgl(j.added)],['Waktu aktif',j.active?eta(j.active):'-'],['Selesai',fin?tgl(j.finished):'-']];
+  $('#prBody').innerHTML=rows.map(([a,b])=>`<b>${a}</b><span>${esc(b)}</span>`).join('');$('#dPr').showModal()}
 poll();
 </script></body></html>

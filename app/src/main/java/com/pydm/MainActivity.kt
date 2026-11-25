@@ -9,12 +9,15 @@ import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.InsetDrawable
 import android.net.Uri
 import android.os.*
+import android.provider.DocumentsContract
 import android.provider.Settings
 import android.text.InputType
 import android.text.TextUtils
 import android.text.format.Formatter
+import android.util.TypedValue
 import android.view.*
 import android.view.inputmethod.EditorInfo
 import android.webkit.*
@@ -45,6 +48,12 @@ const val HIDE_JS = "(function(){var s=document.createElement('style');" +
     "s.textContent='ins.adsbygoogle,[id^=\"div-gpt-ad\"],[id*=\"google_ads\"],iframe[src*=\"doubleclick\"]," +
     "iframe[src*=\"googlesyndication\"],.adsbox,.ad-banner{display:none!important}';" +
     "document.documentElement.appendChild(s)})()"
+
+// Format berkas yang dideteksi (bisa diatur lewat ⚙️ di dialog "Berkas terdeteksi")
+const val DEF_EXT = "mp4,mkv,webm,mp3,m4a,flac,zip,rar,7z,apk,iso,cso,pdf"
+fun parseExt(s: String): List<String> =
+    s.lowercase().split(Regex("[^a-z0-9]+")).filter { it.isNotEmpty() }.distinct()
+fun mediaRegex(l: List<String>) = Regex("\\.(" + l.joinToString("|") + ")(\\?|$)", RegexOption.IGNORE_CASE)
 
 fun storageOk(c: Context) =
     if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager()
@@ -114,19 +123,29 @@ class MainActivity : Activity() {
     @Volatile private var blockAds = true
     private var askedN = false
     private var askedS = false
-    private val media = Regex("\\.(mp4|mkv|webm|mp3|m4a|flac|zip|rar|7z|apk|iso|cso|pdf)(\\?|$)", RegexOption.IGNORE_CASE)
+    @Volatile private var media = mediaRegex(parseExt(DEF_EXT))
 
     inner class Bridge {
         @JavascriptInterface fun openBrowser() { runOnUiThread { show(true) } }
+        @JavascriptInterface fun openFolder(path: String) { runOnUiThread { openFolderAt(path) } }
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
-    private fun btn(t: String, f: () -> Unit) = Button(this).apply {
-        text = t; setTextColor(Color.WHITE); setBackgroundColor(Color.TRANSPARENT)
-        setAllCaps(false); setMinHeight(0); setMinimumHeight(0)
-        minimumWidth = 0; setPadding(18, 0, 18, 0); setOnClickListener { f() }
+    // Tombol bar: tinggi minimal 48dp (area sentuh), ada efek sentuh
+    private fun btn(t: String, sp: Float = 20f, f: () -> Unit) = Button(this).apply {
+        text = t; setTextColor(Color.WHITE); setAllCaps(false); textSize = sp
+        stateListAnimator = null
+        val tv = TypedValue()
+        if (theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, tv, true)) setBackgroundResource(tv.resourceId)
+        else setBackgroundColor(Color.TRANSPARENT)
+        minimumHeight = dp(48); minHeight = dp(48)
+        minimumWidth = dp(48); minWidth = dp(48)
+        setPadding(dp(8), 0, dp(8), 0); setOnClickListener { f() }
     }
+
+    // Parameter tata letak dengan jarak antar tombol
+    private fun lp(w: Int, wt: Float = 0f) = LinearLayout.LayoutParams(w, dp(48), wt).apply { setMargins(dp(2), dp(3), dp(2), dp(3)) }
 
     private fun header(t: String) = TextView(this).apply {
         text = t; setTextColor(Color.WHITE); textSize = 18f
@@ -136,6 +155,8 @@ class MainActivity : Activity() {
     override fun onCreate(s: Bundle?) {
         super.onCreate(s)
         blockAds = getSharedPreferences("pydm", MODE_PRIVATE).getBoolean("ads", true)
+        val savedExt = parseExt(getSharedPreferences("pydm", MODE_PRIVATE).getString("ext", DEF_EXT) ?: DEF_EXT)
+        if (savedExt.isNotEmpty()) media = mediaRegex(savedExt)
         ui = WebView(this).apply {
             settings.javaScriptEnabled = true; settings.domStorageEnabled = true
             setBackgroundColor(Color.parseColor("#121212"))
@@ -156,29 +177,32 @@ class MainActivity : Activity() {
             imeOptions = EditorInfo.IME_ACTION_GO; hint = "Ketik alamat atau cari"
             setOnEditorActionListener { _, a, _ -> if (a == EditorInfo.IME_ACTION_GO) { go(text.toString()); true } else false }
         }
-        tabBtn = btn("1") { openTabsPanel() }
+        tabBtn = btn("1", 16f) { openTabsPanel() }
         val boxBg = GradientDrawable()
-        boxBg.setStroke(dp(1) + 1, Color.WHITE); boxBg.cornerRadius = dp(4).toFloat(); boxBg.setColor(Color.TRANSPARENT)
-        tabBtn.background = boxBg
-        starBtn = btn("☆") { toggleStar() }
+        boxBg.setStroke(dp(2), Color.WHITE); boxBg.cornerRadius = dp(6).toFloat(); boxBg.setColor(Color.TRANSPARENT)
+        tabBtn.background = InsetDrawable(boxBg, dp(9))   // kotak 30dp di dalam area sentuh 48dp
+        starBtn = btn("☆", 26f) { toggleStar() }
         starBtn.setOnLongClickListener { openBmPanel(); true }
+        urlBar.minimumHeight = dp(48); urlBar.minHeight = dp(48)
         val urlRow = LinearLayout(this)
         urlRow.gravity = Gravity.CENTER_VERTICAL
-        urlRow.addView(tabBtn)
-        urlRow.addView(urlBar, LinearLayout.LayoutParams(0, -2, 1f))
-        urlRow.addView(starBtn)
-        urlRow.addView(btn("⟳") { cur.web.reload() })
+        urlRow.setPadding(dp(4), dp(2), dp(4), 0)
+        urlRow.addView(tabBtn, lp(dp(48)))
+        urlRow.addView(urlBar, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(dp(2), 0, dp(2), 0) })
+        urlRow.addView(starBtn, lp(dp(48)))
+        urlRow.addView(btn("⟳", 28f) { cur.web.reload() }, lp(dp(52)))
 
-        adBtn = btn("AD") { toggleAds() }; paintAd()
-        badge = btn("⬇ 0") { showFound() }
+        adBtn = btn("AD", 15f) { toggleAds() }; paintAd()
+        badge = btn("⬇ 0", 15f) { showFound() }
         val navRow = LinearLayout(this)
         navRow.gravity = Gravity.CENTER_VERTICAL
-        navRow.addView(btn("←") { if (cur.web.canGoBack()) cur.web.goBack() }, LinearLayout.LayoutParams(0, -2, 1f))
-        navRow.addView(btn("→") { if (cur.web.canGoForward()) cur.web.goForward() }, LinearLayout.LayoutParams(0, -2, 1f))
-        navRow.addView(btn("🏠") { go(HOME_WEB) }, LinearLayout.LayoutParams(0, -2, 1f))
-        navRow.addView(adBtn, LinearLayout.LayoutParams(0, -2, 1f))
-        navRow.addView(badge, LinearLayout.LayoutParams(0, -2, 1f))
-        navRow.addView(btn("Unduhan") { show(false) }, LinearLayout.LayoutParams(0, -2, 1.3f))
+        navRow.setPadding(dp(4), 0, dp(4), dp(2))
+        navRow.addView(btn("←", 24f) { if (cur.web.canGoBack()) cur.web.goBack() }, lp(0, 1f))
+        navRow.addView(btn("→", 24f) { if (cur.web.canGoForward()) cur.web.goForward() }, lp(0, 1f))
+        navRow.addView(btn("🏠", 22f) { go(HOME_WEB) }, lp(0, 1f))
+        navRow.addView(adBtn, lp(0, 1f))
+        navRow.addView(badge, lp(0, 1.2f))
+        navRow.addView(btn("📥", 22f) { show(false) }, lp(0, 1f))
 
         val bottom = LinearLayout(this)
         bottom.orientation = LinearLayout.VERTICAL
@@ -494,31 +518,107 @@ class MainActivity : Activity() {
     private fun toast(m: String) = runOnUiThread { Toast.makeText(this, m, Toast.LENGTH_LONG).show() }
 
     private fun showFound() {
-        if (cur.found.isEmpty()) { toast("Belum ada media terdeteksi di halaman ini"); return }
         val l = cur.found.toList()
-        AlertDialog.Builder(this).setTitle("Berkas terdeteksi")
-            .setItems(l.map { Uri.decode(it.substringBefore('?').substringAfterLast('/')) }.toTypedArray()) { _, i -> ask(l[i], null, null, null, -1) }
-            .setNeutralButton("Unduh semua") { _, _ -> l.forEach { add(it, URLUtil.guessFileName(it, null, null), cur.web.settings.userAgentString) } }
-            .show()
+        var dlg: AlertDialog? = null
+        val title = LinearLayout(this)
+        title.gravity = Gravity.CENTER_VERTICAL
+        title.setPadding(dp(20), dp(8), dp(6), 0)
+        val tt = TextView(this)
+        tt.text = "Berkas terdeteksi"; tt.setTextColor(Color.WHITE); tt.textSize = 20f
+        title.addView(tt, LinearLayout.LayoutParams(0, -2, 1f))
+        title.addView(btn("⚙️", 22f) { dlg?.dismiss(); extSettings() }, LinearLayout.LayoutParams(dp(48), dp(48)))
+
+        val b = AlertDialog.Builder(this).setCustomTitle(title)
+        if (l.isEmpty()) {
+            b.setMessage("Belum ada berkas terdeteksi di halaman ini.\nKetuk ⚙️ untuk mengatur format yang dideteksi.")
+        } else {
+            b.setItems(l.map { Uri.decode(it.substringBefore('?').substringAfterLast('/')) }.toTypedArray()) { _, i -> ask(l[i], null, null, null, -1) }
+            b.setPositiveButton("Unduh semua") { _, _ -> addAll(l, false) }
+            b.setNeutralButton("Tambah semua") { _, _ -> addAll(l, true) }
+        }
+        b.setNegativeButton("Tutup", null)
+        val d = b.create()
+        dlg = d
+        d.show()
+    }
+
+    private fun extSettings() {
+        val prefs = getSharedPreferences("pydm", MODE_PRIVATE)
+        val et = EditText(this)
+        et.setText(prefs.getString("ext", DEF_EXT) ?: DEF_EXT)
+        et.setSingleLine(false); et.minLines = 2
+        et.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        val pad = FrameLayout(this)
+        pad.setPadding(dp(20), dp(4), dp(20), 0)
+        pad.addView(et, -1, -2)
+        AlertDialog.Builder(this).setTitle("Format yang dideteksi")
+            .setMessage("Pisahkan dengan koma, contoh: mp4, mkv, zip, apk")
+            .setView(pad)
+            .setPositiveButton("Simpan") { _, _ -> saveExt(et.text.toString()) }
+            .setNeutralButton("Bawaan") { _, _ -> saveExt(DEF_EXT) }
+            .setNegativeButton("Batal", null).show()
+    }
+
+    private fun saveExt(raw: String) {
+        val l = parseExt(raw)
+        if (l.isEmpty()) { toast("Isi minimal satu format"); return }
+        getSharedPreferences("pydm", MODE_PRIVATE).edit().putString("ext", l.joinToString(",")).apply()
+        media = mediaRegex(l)
+        toast("Format disimpan: " + l.joinToString(", "))
+        cur.web.reload()
+    }
+
+    // Buka folder unduhan di aplikasi berkas; kalau tidak bisa, tampilkan lokasinya
+    private fun openFolderAt(path: String) {
+        val root = Environment.getExternalStorageDirectory().path
+        if (path.startsWith("$root/")) {
+            val uri = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:" + path.removePrefix("$root/"))
+            for (type in listOf(DocumentsContract.Document.MIME_TYPE_DIR, "resource/folder")) {
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, type))
+                    return
+                } catch (e: Exception) { }
+            }
+        }
+        toast("Folder: $path")
     }
 
     private fun ask(u: String, ua: String?, cd: String?, mime: String?, len: Long) {
         val et = EditText(this).apply { setText(URLUtil.guessFileName(u, cd, mime)) }
+        val agent = ua ?: cur.web.settings.userAgentString
         AlertDialog.Builder(this).setTitle("Unduh berkas?")
             .setMessage(if (len > 0) Formatter.formatFileSize(this, len) else "Ukuran tidak diketahui")
             .setView(et)
-            .setPositiveButton("Unduh") { _, _ -> add(u, et.text.toString(), ua ?: cur.web.settings.userAgentString) }
-            .setNegativeButton("Batal", null).show()
+            .setNegativeButton("Batal", null)
+            .setNeutralButton("Tambah ke daftar") { _, _ -> add(u, et.text.toString(), agent, true) }
+            .setPositiveButton("Unduh") { _, _ -> add(u, et.text.toString(), agent, false) }
+            .show()
     }
 
-    private fun add(u: String, name: String, ua: String) {
+    // paused=true: masuk daftar Unduhan berstatus jeda, jalan setelah ▶ ditekan
+    private fun add(u: String, name: String, ua: String, paused: Boolean) {
         val ref = cur.web.url ?: ""
         val ck = CookieManager.getInstance().getCookie(u) ?: ""
         Thread {
             try {
-                Python.getInstance().getModule("server").callAttr("add", u, name, ref, ck, ua)
-                toast("Ditambahkan ke antrean")
+                Python.getInstance().getModule("server").callAttr("add", u, name, ref, ck, ua, paused)
+                toast(if (paused) "Ditambahkan ke daftar (jeda)" else "Ditambahkan ke antrean")
             } catch (e: Exception) { toast("Gagal: " + (e.message ?: "").take(150)) }
+        }.start()
+    }
+
+    private fun addAll(urls: List<String>, paused: Boolean) {
+        val ref = cur.web.url ?: ""
+        val ua = cur.web.settings.userAgentString
+        val cks = urls.map { CookieManager.getInstance().getCookie(it) ?: "" }
+        Thread {
+            var ok = 0
+            val srv = Python.getInstance().getModule("server")
+            for ((i, u) in urls.withIndex()) {
+                try { srv.callAttr("add", u, URLUtil.guessFileName(u, null, null), ref, cks[i], ua, paused); ok++ }
+                catch (e: Exception) { }
+            }
+            toast("$ok dari ${urls.size} berkas " + if (paused) "ditambahkan ke daftar" else "masuk antrean")
         }.start()
     }
 

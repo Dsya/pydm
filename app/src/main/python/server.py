@@ -84,19 +84,22 @@ def uniq(d, name):
         n = f'{base} ({c}){ext}'; c += 1
     return n
 
-def add(url, name=None, ref='', cookie='', ua=''):
+def make_segs(p):
+    if p['ranged'] and p['size'] > 2 << 20:
+        n = max(1, CFG['segments']); step = -(-p['size'] // n)
+        return [[i * step, min((i + 1) * step, p['size']) - 1, i * step] for i in range(n)]
+    return [[0, p['size'] - 1 if p['ranged'] else -1, 0]]
+
+def add(url, name=None, ref='', cookie='', ua='', paused=False):
+    """paused=True: masuk daftar tanpa langsung diunduh (mulai manual lewat tombol ▶)."""
     p = probe(url, ref, cookie, ua)
     os.makedirs(CFG['dir'], exist_ok=True)
     with LOCK:
         name = uniq(CFG['dir'], clean(name) if name else p['name'])
         jid = NEXT[0]; NEXT[0] += 1
-        if p['ranged'] and p['size'] > 2 << 20:
-            n = max(1, CFG['segments']); step = -(-p['size'] // n)
-            segs = [[i * step, min((i + 1) * step, p['size']) - 1, i * step] for i in range(n)]
-        else:
-            segs = [[0, p['size'] - 1 if p['ranged'] else -1, 0]]
         JOBS[jid] = dict(id=jid, url=p['url'], name=name, dir=CFG['dir'], size=p['size'], ranged=p['ranged'],
-                         segs=segs, status='queued', error='', ref=ref, cookie=cookie, ua=ua, done=0, speed=0, added=time.time())
+                         segs=make_segs(p), status='paused' if paused else 'queued', error='', ref=ref, cookie=cookie,
+                         ua=ua, done=0, speed=0, added=time.time(), active=0, finished=0)
     save(); return jid
 
 def seg_run(j, s, path):
@@ -137,7 +140,8 @@ def worker(j):
         elif fl == 'fail': j['status'] = 'error'
         else:
             os.replace(path, os.path.join(j['dir'], j['name']))
-            j['status'] = 'finished'; j['size'] = j['size'] or os.path.getsize(os.path.join(j['dir'], j['name']))
+            j['status'] = 'finished'; j['finished'] = time.time()
+            j['size'] = j['size'] or os.path.getsize(os.path.join(j['dir'], j['name']))
     except Exception as e:
         j['status'], j['error'] = 'error', str(e)
     j['speed'] = 0; save()
@@ -152,6 +156,7 @@ def ticker():
                 d = sum(s[2] - s[0] for s in j['segs'])
                 j['speed'] = max(0, d - j['done']) if j['status'] == 'downloading' else 0
                 j['done'] = d; act += j['status'] == 'downloading'
+                if j['status'] == 'downloading': j['active'] = j.get('active', 0) + 1
             for j in sorted(JOBS.values(), key=lambda x: x['id']):
                 if act < CFG['parallel'] and j['status'] == 'queued':
                     FLAG.pop(j['id'], None); j['status'] = 'downloading'; act += 1
@@ -181,6 +186,63 @@ def act(jid, a, with_file=False):
                     except OSError: pass
             threading.Thread(target=rm, daemon=True).start()
     save()
+
+def stop_wait(j):
+    """Hentikan unduhan yang sedang jalan dan tunggu workernya selesai."""
+    if j['status'] == 'downloading': FLAG[j['id']] = 'stop'
+    for _ in range(60):
+        if j['status'] != 'downloading': return
+        time.sleep(0.1)
+    raise RuntimeError('Unduhan belum berhenti, coba lagi sebentar lagi')
+
+def redo(jid, url=None):
+    """Unduh ulang: hapus berkas/bagian lama lalu mulai dari awal (opsional dengan link baru)."""
+    j = JOBS.get(jid)
+    if not j: raise ValueError('Unduhan tidak ditemukan')
+    try: p = probe(url or j['url'], j['ref'], j.get('cookie', ''), j.get('ua', ''))
+    except Exception as e: raise ValueError('Link tidak bisa dibuka (mungkin kedaluwarsa): %s' % e)
+    with LOCK:
+        if j['status'] == 'queued': j['status'] = 'paused'  # cegah ticker memulainya selagi direset
+    stop_wait(j)
+    with LOCK:
+        for suf in ('.part', ''):
+            try: os.remove(os.path.join(j['dir'], j['name'] + suf))
+            except OSError: pass
+        FLAG.pop(jid, None)
+        j.update(url=p['url'], size=p['size'], ranged=p['ranged'], segs=make_segs(p), status='queued',
+                 error='', done=0, speed=0, active=0, finished=0, added=time.time())
+    save()
+
+def relink(jid, url, force=False):
+    """Ganti link unduhan yang kedaluwarsa. Lanjut dari bagian lama kalau ukuran berkasnya sama."""
+    j = JOBS.get(jid)
+    if not j: raise ValueError('Unduhan tidak ditemukan')
+    if j['status'] == 'finished': raise ValueError('Unduhan sudah selesai')
+    if j['status'] == 'downloading': raise ValueError('Jeda unduhan dulu')
+    p = probe(url, j['ref'], j.get('cookie', ''), j.get('ua', ''))
+    if (j['size'] and p['size'] != j['size']) or (j['ranged'] and not p['ranged']):
+        if not force: return {'mismatch': 1, 'old': j['size'], 'new': p['size']}
+        redo(jid, url); return {'ok': 1, 'redo': 1}
+    with LOCK:
+        j['url'] = p['url']; j['status'] = 'queued'; j['error'] = ''
+    save(); return {'ok': 1}
+
+def rename(jid, new):
+    with LOCK:
+        j = JOBS.get(jid)
+        if not j: raise ValueError('Unduhan tidak ditemukan')
+        if j['status'] == 'downloading': raise ValueError('Jeda unduhan dulu')
+        new = clean(new)
+        if new == j['name']: return new
+        d = j['dir']
+        if os.path.exists(os.path.join(d, new)) or os.path.exists(os.path.join(d, new + '.part')) \
+                or any(o['dir'] == d and o['name'] == new for o in JOBS.values()):
+            raise ValueError('Nama itu sudah dipakai')
+        for suf in ('', '.part'):
+            a = os.path.join(d, j['name'] + suf)
+            if os.path.exists(a): os.rename(a, os.path.join(d, new + suf))
+        j['name'] = new
+    save(); return new
 
 INJ = r'''<script>(function(){var P=parent,E=/\.(?:@EXT@)(?:$|[?#])/i;
 function go(u){if(E.test(u))P.postMessage({t:'dl',url:u,ref:__B},'*');else location.href='/browse?u='+encodeURIComponent(u)}
@@ -232,8 +294,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             d = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))) or b'{}')
-            if self.path == '/api/add': self.send(200, {'id': add(d['url'], d.get('name'), d.get('ref', ''))})
+            if self.path == '/api/add': self.send(200, {'id': add(d['url'], d.get('name'), d.get('ref', ''), paused=bool(d.get('paused')))})
             elif self.path == '/api/act': act(int(d['id']), d['a'], d.get('file', False)); self.send(200, {'ok': 1})
+            elif self.path == '/api/relink': self.send(200, relink(int(d['id']), d['url'], bool(d.get('force'))))
+            elif self.path == '/api/redo': redo(int(d['id'])); self.send(200, {'ok': 1})
+            elif self.path == '/api/rename': self.send(200, {'name': rename(int(d['id']), d['name'])})
             elif self.path == '/api/cfg':
                 CFG.update(dir=d['dir'], parallel=max(1, int(d['parallel'])), segments=min(16, max(1, int(d['segments']))))
                 save(); self.send(200, CFG)
