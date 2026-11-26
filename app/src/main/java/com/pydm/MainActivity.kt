@@ -45,7 +45,108 @@ val AD_HOSTS = ("doubleclick.net googlesyndication.com googleadservices.com adse
     "infolinks.com monetag.com realsrv.com magsrv.com tsyndicate.com onclkds.com adtng.com scorecardresearch.com " +
     "ero-advertising.com clickaine.com popunderjs.com adbrite.com").split(" ")
 
-fun isAd(h: String?) = h != null && AD_HOSTS.any { h == it || h.endsWith(".$it") }
+// Daftar blokir pribadi (ditambah dari Catatan blokir, disimpan di pengaturan)
+@Volatile var USER_HOSTS: List<String> = emptyList()
+
+fun isAd(h: String?) = h != null &&
+    (AD_HOSTS.any { h == it || h.endsWith(".$it") } || USER_HOSTS.any { h == it || h.endsWith(".$it") })
+
+// Situs umum: tidak boleh diblokir per domain dari catatan blokir
+val PROTECTED_SITES = setOf("google.com", "gstatic.com", "googleapis.com", "youtube.com", "ytimg.com",
+    "bing.com", "duckduckgo.com", "facebook.com", "github.com", "wikipedia.org")
+
+// Kunci situs: "cdn.oppadrama.io" dan "www.oppadrama.io" sama-sama "oppadrama.io"
+fun siteKey(h: String): String {
+    val p = h.lowercase().trimEnd('.').split('.')
+    if (p.size <= 2 || p.all { x -> x.isNotEmpty() && x.all { c -> c.isDigit() } }) return p.joinToString(".")
+    val sl = p[p.size - 2]
+    val two = setOf("co", "com", "net", "org", "ac", "go", "or", "web", "my", "sch", "gov", "edu")
+    return if (p.last().length == 2 && sl in two) p.takeLast(3).joinToString(".") else p.takeLast(2).joinToString(".")
+}
+
+// Samakan bentuk link untuk dibandingkan (abaikan skema, #fragmen, dan / di ujung)
+fun normLink(u: String) = u.substringBefore('#').substringAfter("://").trimEnd('/').lowercase()
+
+class BlockEntry(val kind: String, val target: String, val from: String, var count: Int, var time: Long)
+
+// Script penjaga: mencatat ketukan asli pada link/form, dan menetralkan lapisan transparan
+// layar penuh yang menangkap ketukan pertama. @@N@@ diganti nama jembatan acak.
+const val GUARD_JS = """(function(){
+if(window.__pydmG)return;
+var B=window['@@N@@'];if(!B)return;
+window.__pydmG=1;
+function tap(e){
+  if(!e.isTrusted)return;
+  var el=e.target,n=0;
+  while(el&&el!==document&&n<12){
+    if(el.tagName==='A'&&el.href){try{B.tap(String(el.href));}catch(x){}return;}
+    el=el.parentNode;n++;
+  }
+}
+document.addEventListener('click',tap,true);
+document.addEventListener('submit',function(e){
+  if(!e.isTrusted)return;
+  var f=e.target;
+  if(f&&typeof f.action==='string'&&f.action){try{B.tap(f.action);}catch(x){}}
+},true);
+var done=[];
+function vw(){return window.innerWidth||document.documentElement.clientWidth||0}
+function vh(){return window.innerHeight||document.documentElement.clientHeight||0}
+function ghost(el){
+  if(!el||el===document.body||el===document.documentElement)return false;
+  var cs=getComputedStyle(el),pos=cs.position;
+  if(pos!=='fixed'&&pos!=='absolute')return false;
+  if(cs.display==='none'||cs.visibility==='hidden')return false;
+  var r=el.getBoundingClientRect();
+  if(r.width<vw()*0.85||r.height<vh()*0.85)return false;
+  var op=parseFloat(cs.opacity);
+  if(el.tagName==='IFRAME')return op<0.05;
+  if((el.innerText||'').trim()!=='')return false;
+  if(el.querySelector('img,video,audio,canvas,svg,input,textarea,select,button,object,embed,iframe'))return false;
+  if(op<0.05)return true;
+  var bg=cs.backgroundColor;
+  if(!(bg==='transparent'||(bg.indexOf('rgba')===0&&/,\s*0\)/.test(bg)))||cs.backgroundImage!=='none')return false;
+  if(el.getElementsByTagName('*').length>2)return false;
+  if(pos==='absolute'){var p=el.parentElement;if(p&&p.querySelector('video,audio,iframe'))return false;}
+  return true;
+}
+function neutralize(el){
+  if(el.__pg)return;
+  el.__pg=1;
+  el.style.setProperty('pointer-events','none','important');
+  done.push(el);
+  var d=el.tagName.toLowerCase()+(el.id?'#'+el.id:'')+
+    (typeof el.className==='string'&&el.className.trim()?'.'+el.className.trim().split(/\s+/)[0]:'');
+  try{B.ghost(d);}catch(x){}
+}
+function restore(){
+  for(var i=done.length-1;i>=0;i--){
+    var el=done[i];
+    if(!document.contains(el)||!ghost(el)){el.style.removeProperty('pointer-events');el.__pg=0;done.splice(i,1);}
+  }
+}
+function at(x,y){
+  var s=document.elementsFromPoint?document.elementsFromPoint(x,y):[];
+  for(var i=0;i<s.length;i++){
+    var el=s[i];
+    if(el===document.body||el===document.documentElement)break;
+    if(ghost(el))neutralize(el);
+  }
+}
+function sweep(){
+  try{
+    restore();
+    var w=vw(),h=vh(),k=[0.2,0.5,0.8];
+    for(var i=0;i<3;i++)for(var j=0;j<3;j++)at(w*k[i],h*k[j]);
+  }catch(x){}
+}
+document.addEventListener('touchstart',function(e){
+  if(!e.isTrusted)return;
+  var t=e.touches&&e.touches[0];
+  if(t){try{at(t.clientX,t.clientY);}catch(x){}}
+},{capture:true,passive:true});
+sweep();setInterval(sweep,1500);
+})()"""
 
 const val HIDE_JS = "(function(){var s=document.createElement('style');" +
     "s.textContent='ins.adsbygoogle,[id^=\"div-gpt-ad\"],[id*=\"google_ads\"],iframe[src*=\"doubleclick\"]," +
@@ -65,6 +166,9 @@ fun storageOk(c: Context) =
 
 class Tab(val web: WebView) {
     var title = ""
+    @Volatile var pageHost = ""     // host halaman yang sedang tampil (untuk catatan blokir)
+    @Volatile var tapUrl = ""       // link terakhir yang benar-benar diketuk
+    @Volatile var tapAt = 0L
     val found = LinkedHashSet<String>()
 }
 
@@ -131,6 +235,12 @@ class MainActivity : Activity() {
     private var fsCb: WebChromeClient.CustomViewCallback? = null
     private lateinit var bmDrawer: SwipePanel
     @Volatile private var blockAds = true
+    private val guardName = "pg" + java.lang.Long.toHexString(java.util.Random().nextLong() ushr 8)
+    private lateinit var guardBar: LinearLayout
+    private lateinit var guardTxt: TextView
+    private var guardAct: (() -> Unit)? = null
+    private val hideGuardRun = Runnable { if (::guardBar.isInitialized) guardBar.visibility = View.GONE }
+    private val blockLog = ArrayList<BlockEntry>()
     private var askedN = false
     private var askedS = false
     @Volatile private var media = mediaRegex(parseExt(DEF_EXT))
@@ -139,6 +249,12 @@ class MainActivity : Activity() {
         @JavascriptInterface fun openBrowser() { runOnUiThread { show(true) } }
         @JavascriptInterface fun openFolder(path: String) { runOnUiThread { openFolderAt(path) } }
         @JavascriptInterface fun kick() { Engine.ensureService(applicationContext) }
+    }
+
+    // Jembatan per tab untuk penjaga (nama acak tiap peluncuran; hanya menerima ketukan asli dari script)
+    inner class TabGuard(private val t: Tab) {
+        @JavascriptInterface fun tap(h: String?) { if (h != null) { t.tapUrl = h; t.tapAt = SystemClock.uptimeMillis() } }
+        @JavascriptInterface fun ghost(d: String?) { if (d != null) logBlock("Lapisan", d.take(80), t.pageHost) }
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -168,6 +284,9 @@ class MainActivity : Activity() {
         blockAds = getSharedPreferences("pydm", MODE_PRIVATE).getBoolean("ads", true)
         val savedExt = parseExt(getSharedPreferences("pydm", MODE_PRIVATE).getString("ext", DEF_EXT) ?: DEF_EXT)
         if (savedExt.isNotEmpty()) media = mediaRegex(savedExt)
+        USER_HOSTS = (getSharedPreferences("pydm", MODE_PRIVATE).getString("myblock", "") ?: "")
+            .split(" ").filter { it.isNotEmpty() }
+        loadBlockLog()
         ui = WebView(this).apply {
             settings.javaScriptEnabled = true; settings.domStorageEnabled = true
             setBackgroundColor(Color.parseColor("#121212"))
@@ -204,6 +323,7 @@ class MainActivity : Activity() {
         urlRow.addView(btn("⟳", 28f) { cur.web.reload() }, lp(dp(52)))
 
         adBtn = btn("AD", 15f) { toggleAds() }; paintAd()
+        adBtn.setOnLongClickListener { showBlockLog(); true }   // tekan lama = catatan blokir
         badge = btn("⬇ 0", 15f) { showFound() }
         val navRow = LinearLayout(this)
         navRow.gravity = Gravity.CENTER_VERTICAL
@@ -222,6 +342,19 @@ class MainActivity : Activity() {
         bottom.addView(navRow, -1, -2)
 
         tabHost = FrameLayout(this)
+        guardTxt = TextView(this).apply {
+            setTextColor(Color.WHITE); textSize = 13f; maxLines = 2; ellipsize = TextUtils.TruncateAt.END
+        }
+        guardBar = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(Color.parseColor("#EE333333"))
+            setPadding(dp(12), dp(2), dp(4), dp(2))
+            visibility = View.GONE
+            addView(guardTxt, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(btn("Buka juga", 14f) {
+                val a = guardAct; guardAct = null; visibility = View.GONE; a?.invoke()
+            }, LinearLayout.LayoutParams(-2, dp(48)))
+        }
         box = LinearLayout(this)
         box.orientation = LinearLayout.VERTICAL
         box.visibility = View.GONE
@@ -319,14 +452,17 @@ class MainActivity : Activity() {
         val t = Tab(w)
         w.settings.javaScriptEnabled = true
         w.settings.domStorageEnabled = true
+        w.addJavascriptInterface(TabGuard(t), guardName)
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
         w.webViewClient = object : WebViewClient() {
             override fun onPageStarted(v: WebView, u: String, f: Bitmap?) {
                 t.found.clear()
+                t.pageHost = Uri.parse(u).host ?: ""
                 if (t === cur) { refresh(); urlBar.setText(u); paintStar() }
             }
+            override fun onPageCommitVisible(v: WebView, u: String) { injectGuard(v) }
             override fun onPageFinished(v: WebView, u: String) {
-                if (blockAds) v.evaluateJavascript(HIDE_JS, null)
+                if (blockAds) { v.evaluateJavascript(HIDE_JS, null); injectGuard(v) }
                 t.title = v.title ?: u
                 addHist(t.title, u)
                 if (t === cur) paintStar()
@@ -335,12 +471,26 @@ class MainActivity : Activity() {
             override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
                 if (!blockAds) return false
                 val sc = r.url.scheme ?: ""
-                if (sc !in listOf("http", "https", "about", "blob", "data", "mailto", "tel")) { toast("Pengalihan ke aplikasi diblokir"); return true }
-                if (isAd(r.url.host)) { toast("Halaman iklan diblokir"); return true }
+                val from = Uri.parse(v.url ?: "").host ?: ""
+                if (sc !in listOf("http", "https", "about", "blob", "data", "mailto", "tel")) {
+                    logBlock("Aplikasi", r.url.toString().take(100), from)
+                    toast("Pengalihan ke aplikasi diblokir"); return true
+                }
+                if (isAd(r.url.host)) { logBlock("Iklan", r.url.host ?: "", from); toast("Halaman iklan diblokir"); return true }
+                // Penjaga pengalihan: halaman utama pindah ke situs lain tanpa ketukan pada link itu
+                if (r.isForMainFrame && !r.isRedirect && !navAllowed(t, v.url, r.url)) {
+                    val u = r.url.toString()
+                    logBlock("Pengalihan", u.take(140), from)
+                    showGuard("Pengalihan otomatis diblokir: ${r.url.host ?: u}") { v.loadUrl(u) }
+                    return true
+                }
                 return false
             }
             override fun shouldInterceptRequest(v: WebView, r: WebResourceRequest): WebResourceResponse? {
-                if (blockAds && isAd(r.url.host)) return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                if (blockAds && isAd(r.url.host)) {
+                    logBlock("Iklan", r.url.host ?: "", t.pageHost)
+                    return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                }
                 val u = r.url.toString()
                 if (media.containsMatchIn(u)) runOnUiThread { t.found.add(u); if (t === cur) refresh() }
                 return null
@@ -361,11 +511,18 @@ class MainActivity : Activity() {
             override fun onHideCustomView() { exitFs() }
             override fun getDefaultVideoPoster(): Bitmap? = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
             override fun onCreateWindow(v: WebView, d: Boolean, g: Boolean, m: Message): Boolean {
-                if (blockAds && !g) { toast("Popup diblokir"); return false }  // popup tanpa ketukan
+                if (blockAds && !g) { logBlock("Popup", "tanpa ketukan", t.pageHost); toast("Popup diblokir"); return false }  // popup tanpa ketukan
                 val tmp = WebView(this@MainActivity)
                 tmp.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(w2: WebView, r2: WebResourceRequest): Boolean {
-                        if (blockAds && isAd(r2.url.host)) toast("Popup iklan diblokir") else openTab(r2.url.toString())
+                        val tu = r2.url.toString()
+                        if (blockAds && isAd(r2.url.host)) {
+                            logBlock("Popup iklan", r2.url.host ?: "", t.pageHost); toast("Popup iklan diblokir")
+                        } else if (blockAds && !navAllowed(t, v.url, r2.url)) {
+                            // popup dari ketukan hanya dibuka bila satu situs (atau memang link yang diketuk)
+                            logBlock("Popup", tu.take(140), t.pageHost)
+                            showGuard("Popup ke situs lain ditahan: ${r2.url.host ?: tu}") { openTab(tu) }
+                        } else openTab(tu)
                         w2.destroy(); return true
                     }
                 }
@@ -388,6 +545,8 @@ class MainActivity : Activity() {
         tabHost.addView(t.web, FrameLayout.LayoutParams(-1, -1))
         tabHost.addView(stripL, FrameLayout.LayoutParams(dp(20), -1, Gravity.START))
         tabHost.addView(stripR, FrameLayout.LayoutParams(dp(20), -1, Gravity.END))
+        (guardBar.parent as? ViewGroup)?.removeView(guardBar)
+        tabHost.addView(guardBar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         urlBar.setText(t.web.url ?: "")
         refresh(); paintStar(); updateCount(); rebuildTabs()
     }
@@ -717,6 +876,118 @@ class MainActivity : Activity() {
             else 0
         }
     }
+
+    // ---------- penjaga pengalihan + catatan blokir ----------
+    private fun injectGuard(v: WebView) {
+        if (blockAds) v.evaluateJavascript(GUARD_JS.replace("@@N@@", guardName), null)
+    }
+
+    // Boleh pindah ke target? Ya bila satu situs, ketukan asli pada link itu, atau berkas unduhan
+    private fun navAllowed(t: Tab, curUrl: String?, target: Uri): Boolean {
+        val th = target.host ?: return true
+        val ch = Uri.parse(curUrl ?: "").host ?: return true
+        if (siteKey(th) == siteKey(ch)) return true
+        if (media.containsMatchIn(target.toString())) return true
+        return SystemClock.uptimeMillis() - t.tapAt < 8000 && normLink(t.tapUrl) == normLink(target.toString())
+    }
+
+    private fun showGuard(msg: String, act: () -> Unit) = runOnUiThread {
+        guardTxt.text = msg
+        guardAct = act
+        guardBar.visibility = View.VISIBLE
+        guardBar.removeCallbacks(hideGuardRun)
+        guardBar.postDelayed(hideGuardRun, 8000)
+    }
+
+    private fun logBlock(kind: String, target: String, from: String?) {
+        val f = from ?: ""
+        synchronized(blockLog) {
+            val e = blockLog.firstOrNull { it.kind == kind && it.target == target && it.from == f }
+            if (e != null) { e.count++; e.time = System.currentTimeMillis() }
+            else {
+                blockLog.add(BlockEntry(kind, target, f, 1, System.currentTimeMillis()))
+                if (blockLog.size > 150) blockLog.minByOrNull { it.time }?.let { blockLog.remove(it) }
+            }
+        }
+    }
+
+    private fun saveBlockLog() {
+        val a = JSONArray()
+        synchronized(blockLog) {
+            blockLog.forEach { a.put(JSONObject().put("k", it.kind).put("t", it.target).put("f", it.from).put("c", it.count).put("d", it.time)) }
+        }
+        getSharedPreferences("pydm", MODE_PRIVATE).edit().putString("blocklog", a.toString()).apply()
+    }
+
+    private fun loadBlockLog() {
+        try {
+            val a = JSONArray(getSharedPreferences("pydm", MODE_PRIVATE).getString("blocklog", "[]") ?: "[]")
+            for (i in 0 until a.length()) {
+                val o = a.getJSONObject(i)
+                blockLog.add(BlockEntry(o.getString("k"), o.getString("t"), o.getString("f"), o.getInt("c"), o.getLong("d")))
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun entryLabel(e: BlockEntry): String {
+        val t = if (e.target.length > 70) e.target.take(70) + "…" else e.target
+        return "${e.kind}: $t\n← ${e.from.ifEmpty { "?" }}  ×${e.count}"
+    }
+
+    // Tekan lama tombol AD: apa saja yang diblokir dan dari halaman mana
+    private fun showBlockLog() {
+        val l = synchronized(blockLog) { blockLog.sortedByDescending { it.time } }.take(80)
+        val b = AlertDialog.Builder(this).setTitle("Catatan blokir")
+        if (l.isEmpty()) {
+            b.setMessage("Belum ada yang diblokir.\nKetuk AD untuk menyalakan atau mematikan pemblokir.")
+        } else {
+            b.setItems(l.map { entryLabel(it) }.toTypedArray()) { _, i -> entryMenu(l[i]) }
+            b.setPositiveButton("Kosongkan") { _, _ -> synchronized(blockLog) { blockLog.clear() }; saveBlockLog() }
+        }
+        b.setNeutralButton("Daftar pribadi (${USER_HOSTS.size})") { _, _ -> userListDialog() }
+        b.setNegativeButton("Tutup", null)
+        b.show()
+    }
+
+    private fun entryMenu(e: BlockEntry) {
+        val host = (if (e.target.contains("://")) Uri.parse(e.target).host
+            else e.target.takeIf { Regex("^[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$").matches(it) })?.lowercase()
+        var msg = "${e.kind}\n${e.target}\n\nDari halaman: ${e.from.ifEmpty { "?" }}\nDiblokir ${e.count}×"
+        val key = host?.let { siteKey(it) } ?: ""
+        val b = AlertDialog.Builder(this).setTitle("Detail blokir").setNegativeButton("Tutup", null)
+        when {
+            host == null -> msg += "\n\nTidak ada domain yang bisa diblokir; ini ditahan otomatis oleh penjaga."
+            key in PROTECTED_SITES -> msg += "\n\n$key adalah situs umum, jadi tidak diblokir per domain. Pengalihan ke sana ditangani penjaga pengalihan."
+            AD_HOSTS.any { host == it || host.endsWith(".$it") } -> msg += "\n\nDomain ini sudah ada di daftar bawaan."
+            USER_HOSTS.any { host == it || host.endsWith(".$it") } -> msg += "\n\nDomain ini sudah ada di daftar pribadi."
+            else -> b.setPositiveButton("Blokir $host") { _, _ -> addUserHost(host) }
+        }
+        b.setMessage(msg).show()
+    }
+
+    private fun addUserHost(h: String) {
+        USER_HOSTS = (USER_HOSTS + h).distinct()
+        getSharedPreferences("pydm", MODE_PRIVATE).edit().putString("myblock", USER_HOSTS.joinToString(" ")).apply()
+        toast("$h masuk daftar blokir pribadi")
+    }
+
+    private fun userListDialog() {
+        val l = USER_HOSTS
+        val b = AlertDialog.Builder(this).setTitle("Daftar blokir pribadi")
+        if (l.isEmpty()) b.setMessage("Masih kosong. Tambahkan dari catatan blokir (ketuk satu entri).")
+        else b.setItems(l.toTypedArray()) { _, i ->
+            AlertDialog.Builder(this).setMessage("Hapus ${l[i]} dari daftar?")
+                .setPositiveButton("Hapus") { _, _ ->
+                    USER_HOSTS = USER_HOSTS - l[i]
+                    getSharedPreferences("pydm", MODE_PRIVATE).edit().putString("myblock", USER_HOSTS.joinToString(" ")).apply()
+                    toast("Dihapus dari daftar pribadi")
+                }
+                .setNegativeButton("Batal", null).show()
+        }
+        b.setNegativeButton("Tutup", null).show()
+    }
+
+    override fun onPause() { super.onPause(); saveBlockLog() }
 
     // ---------- umum ----------
     override fun onResume() { super.onResume(); step() }
